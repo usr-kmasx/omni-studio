@@ -164,6 +164,7 @@ export function openBackendManager({ onBack, onSettingsChanged } = {}) {
           <!-- Parâmetros -->
           <div class="bm-section">
             <div class="bm-title">${t('backend.files')}</div>
+            <button class="btn" id="bmBundledModel" type="button" hidden>${t('backend.useBundledModel')}</button>
 
             <div class="bm-file-row">
               <div class="bm-file-info">
@@ -297,6 +298,8 @@ export function openBackendManager({ onBack, onSettingsChanged } = {}) {
     else if (pst === 'stopping') procLabel = t('backend.stopping');
     else if (pst === 'error') procLabel = t('backend.serverError');
     else procLabel = statusFailed ? t('backend.statusUnavailable') : t('backend.checking');
+    const error = startError || st.integratedStartError;
+    if (error && !busyOp && pst === 'error') procLabel = error;
     if (startError && !busyOp && pst !== 'running') procLabel = startError;
     if (procEl) procEl.textContent = procLabel;
     if (btnStart) {
@@ -325,6 +328,10 @@ export function openBackendManager({ onBack, onSettingsChanged } = {}) {
         name.classList.toggle('bm-file-missing', !!path && !exists);
       }
     }
+    const bundledModel = modal.querySelector('#bmBundledModel');
+    bundledModel.hidden = !st.bundledModel;
+    bundledModel.disabled = savingParams || modelSelectionPending || busyOp || !known ||
+      (modelPath === st.bundledModel && mmPath === st.bundledProjector);
     const clearModel = modal.querySelector('#bmClearModel');
     const clearMm = modal.querySelector('#bmClearMm');
     const selectModel = modal.querySelector('#bmSelectModel');
@@ -499,14 +506,37 @@ export function openBackendManager({ onBack, onSettingsChanged } = {}) {
     refresh();
   });
 
+  function setFileDraft(key, path) {
+    const saved = key === 'model' ? state().paramsModel : state().paramsMmproj;
+    if (path === (saved || null)) fileDraft.delete(key);
+    else fileDraft.set(key, path);
+  }
+
+  function showFileDraft() {
+    saveStatus.textContent = '';
+    updateSaveButton();
+    refresh();
+  }
+
+  modal.querySelector('#bmBundledModel').addEventListener('click', () => {
+    const { bundledModel, bundledProjector } = state();
+    if (!bundledModel || !bundledProjector) return;
+    setFileDraft('model', bundledModel);
+    setFileDraft('mmproj', bundledProjector);
+    showFileDraft();
+  });
+
   const bindSelect = (btnId, cmd, clearId, key) => {
     const setDraft = (path) => {
-      const saved = key === 'model' ? state().paramsModel : state().paramsMmproj;
-      if (path === (saved || null)) fileDraft.delete(key);
-      else fileDraft.set(key, path);
-      saveStatus.textContent = '';
-      updateSaveButton();
-      refresh();
+      setFileDraft(key, path);
+      if (key === 'model') {
+        const snapshot = state();
+        const projector = fileDraft.has('mmproj') ? fileDraft.get('mmproj') : snapshot.paramsMmproj;
+        if (snapshot.bundledProjector && projector === snapshot.bundledProjector) {
+          setFileDraft('mmproj', null);
+        }
+      }
+      showFileDraft();
     };
 
     modal.querySelector('#' + btnId).addEventListener('click', async () => {
@@ -536,7 +566,7 @@ export function openBackendManager({ onBack, onSettingsChanged } = {}) {
       startPending = true;
       startError = '';
       refresh();
-      const res = await backendRpc('start-integrated', {}, 180000);
+      const res = await backendRpc('start-integrated', { externalUrl: loadSettings().serverUrl }, 180000);
       if (res.state) window.__omniBackend = res.state;
       startPending = false;
       if (!res.ok) {

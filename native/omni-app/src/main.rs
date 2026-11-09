@@ -6,6 +6,7 @@
 //! llama.cpp já consumido pelo próprio JavaScript do site.
 
 mod backend_manager;
+mod bundle;
 mod hf_catalog;
 mod history;
 mod site_server;
@@ -303,6 +304,7 @@ fn main() {
 fn build_ui(app: &gtk4::Application) {
     let site_root = locate_site_root();
 
+    let bundle = bundle::Bundle::discover(&site_root);
     let server = match site_server::SiteServer::start(site_root) {
         Ok(s) => s,
         Err(e) => {
@@ -331,7 +333,7 @@ fn build_ui(app: &gtk4::Application) {
         .build();
 
     // ---------- Gerenciador de backends + ponte JS ↔ Rust ----------
-    let manager = Arc::new(BackendManager::new(&server.base_url));
+    let manager = Arc::new(BackendManager::with_bundle(&server.base_url, bundle));
     {
         let manager = manager.clone();
         app.connect_shutdown(move |_| manager.shutdown());

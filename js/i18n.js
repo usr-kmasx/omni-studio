@@ -754,6 +754,16 @@ for (const [language, [retry, saveFailed, loadFailed]] of Object.entries(persist
   });
 }
 
+for (const [language, label] of Object.entries({
+  en: 'Use bundled LFM3-Omni',
+  pt: 'Usar LFM3-Omni incluído',
+  es: 'Usar LFM3-Omni incluido',
+  fr: 'Utiliser LFM3-Omni inclus',
+  de: 'Mitgeliefertes LFM3-Omni verwenden',
+})) {
+  translations[language]['backend.useBundledModel'] = label;
+}
+
 export function setLocale(value) {
   locale = availableLocales.includes(value) ? value : 'en';
   if (typeof document !== 'undefined') {

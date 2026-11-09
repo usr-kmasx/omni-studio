@@ -295,6 +295,27 @@ pub fn install_backend_managed(
     cancel: &AtomicBool,
     progress: &ProgressFn,
 ) -> Result<IntegratedMeta, EngineError> {
+    install_backend_from(None, cancel, progress)
+}
+
+pub fn verify_sha256(path: &Path, expected: &str) -> Result<(), EngineError> {
+    let mut file = fs::File::open(path)?;
+    let mut hash = Sha256::new();
+    std::io::copy(&mut file, &mut hash)?;
+    let got = format!("{:x}", hash.finalize());
+    if got != expected {
+        return Err(EngineError::Checksum { expected: expected.into(), got });
+    }
+    Ok(())
+}
+
+pub fn install_backend_from(
+    bundled_archive: Option<&Path>,
+    cancel: &AtomicBool,
+    progress: &ProgressFn,
+) -> Result<IntegratedMeta, EngineError> {
+    static INSTALL_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _guard = INSTALL_LOCK.lock().map_err(|_| std::io::Error::other("backend installation lock poisoned"))?;
     let final_dir = paths::backend_version_dir();
     match validate_backend_install() {
         Ok(()) => {
@@ -306,26 +327,30 @@ pub fn install_backend_managed(
         }
     }
 
-    let cache = paths::cache_dir();
-    fs::create_dir_all(&cache)?;
-    let archive_path = cache.join(paths::backend_archive_name());
+    let archive_path = if let Some(path) = bundled_archive {
+        verify_sha256(path, paths::BACKEND_SHA256)?;
+        path.to_path_buf()
+    } else {
+        let path = paths::cache_dir().join(paths::backend_archive_name());
+        download_file_verified(
+            paths::BACKEND_URL,
+            paths::BACKEND_SHA256,
+            &path,
+            cancel,
+            progress,
+        )?;
+        path
+    };
 
-    download_file_verified(
-        paths::BACKEND_URL,
-        paths::BACKEND_SHA256,
-        &archive_path,
-        cancel,
-        progress,
-    )?;
+    let parent = final_dir.parent().unwrap();
+    fs::create_dir_all(parent)?;
+    let staging = tempfile::tempdir_in(parent)?;
+    let unpacked = staging.path().join("unpacked");
+    fs::create_dir(&unpacked)?;
+    archive::extract_tar_gz(&archive_path, &unpacked)?;
+    let root = find_backend_root(&unpacked)?;
 
-    let staging = tempfile::tempdir_in(&cache)?;
-    archive::extract_tar_gz(&archive_path, staging.path())?;
-    let root = find_backend_root(staging.path())?;
-
-    // Organiza num diretório de staging (não toca a instalação existente
-    // até que a substituição completa esteja pronta e validada).
-    let staging_final = cache.join(format!("backend-staging-{}", std::process::id()));
-    let _ = fs::remove_dir_all(&staging_final);
+    let staging_final = staging.path().join("install");
     fs::create_dir_all(staging_final.join("bin"))?;
     fs::create_dir_all(staging_final.join("lib"))?;
     let bin_src = root.join(BACKEND_BIN_NAME);

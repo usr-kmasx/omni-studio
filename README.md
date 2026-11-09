@@ -1,16 +1,23 @@
-# Omni Studio — Interface Web para LFM3-Omni-2B
+# Omni Studio
 
-Interface de conversação **multimodal** para o modelo de IA local
-[LFM3-Omni-2B](https://huggingface.co/LiquidAI/LFM3-Omni-2B-GGUF) (Liquid AI),
-rodando no servidor [llama.cpp](https://github.com/ggml-org/llama.cpp) (`llama serve`).
+Aplicativo de desktop para conversar com modelos locais por texto, imagem, áudio e vídeo. A edição completa para Linux x86-64 inclui o **LFM3-Omni-2B Q4_K_M** oficial da Liquid AI, o projetor multimodal correspondente e o backend integrado [llama.cpp](https://github.com/ggml-org/llama.cpp).
 
-Nenhum serviço externo, nenhuma API de terceiros, nenhuma dependência de
-pacote. Todo o processamento é feito pelo modelo local. O site é uma SPA
-estática (HTML/CSS/JS puros) que conversa diretamente com o llama.cpp.
+## Edição completa para Linux x86-64
 
----
+Extraia a pasta inteira do pacote de distribuição e execute `./launch.sh`. O sistema precisa de glibc compatível com o binário, GTK 4.10 ou superior e WebKitGTK 6.0. Instale também `ffmpeg` e `ffprobe` para enviar vídeos. A edição usa CPU no primeiro perfil. Para aceleração em uma máquina com Vulkan, ajuste as camadas na GPU em **Configurações → Servidores e modelos → Local**.
 
-## 1. Como executar
+O pacote já contém os componentes necessários para iniciar o modelo sem baixar arquivos. Um servidor externo compatível, quando disponível, tem prioridade. Quem já usa o Omni Studio pode selecionar **Usar LFM3-Omni incluído** e salvar, ou continuar usando o modelo configurado. Mantenha a pasta inteira ao mover o app.
+
+### Montagem do pacote
+
+Use `tools/package-linux-complete.sh DIRETORIO_DE_INSUMOS BINARIO_RELEASE SAIDA.tar.gz` no Linux x86-64. Compile `omni-app` em modo release e coloque estes insumos no diretório indicado:
+
+- `LFM3-Omni-2B-Q4_K_M.gguf`, `mmproj-LFM3-Omni-2B-Q4_K_M.gguf` e o `LICENSE` salvo como `LICENSE-LFM` da [revisão oficial fixada da Liquid AI](https://huggingface.co/LiquidAI/LFM3-Omni-2B-GGUF/tree/d508b88f08a5b4286f2d2805a6a8d69a0ff44c72).
+- `llama-b12202-bin-ubuntu-vulkan-x64.tar.gz` da [release b12202 do llama.cpp](https://github.com/ggml-org/llama.cpp/releases/tag/b12202).
+
+O script verifica os quatro SHA-256 e o limite de tamanho do GitHub Releases. O código do Omni Studio é MIT. Os pesos da Liquid AI são distribuídos sob a [LFM Open License v1.0](https://huggingface.co/LiquidAI/LFM3-Omni-2B-GGUF/blob/d508b88f08a5b4286f2d2805a6a8d69a0ff44c72/LICENSE).
+
+## 1. Como executar a interface web de desenvolvimento
 
 Pré-requisitos:
 

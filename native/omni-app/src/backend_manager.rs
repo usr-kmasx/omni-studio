@@ -7,6 +7,7 @@
 //!   - "integrated":  servidor integrado iniciado, saudável;
 //!   - "none":        nenhum backend disponível.
 
+use crate::bundle::{self, Bundle};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
@@ -118,17 +119,24 @@ struct Inner {
     active_url: Option<String>,
     process: Option<RunningServer>,
     revision: u64,
+    start_error: Option<String>,
     op: &'static str, // stopped | starting | running | stopping | error
 }
 
 pub struct BackendManager {
     inner: Mutex<Inner>,
     cors_origin: String,
+    bundle: Option<Bundle>,
     shutdown_requested: AtomicBool,
 }
 
 impl BackendManager {
-    pub fn new(cors_origin: &str) -> Self {
+    pub fn with_bundle(cors_origin: &str, bundle: Option<Bundle>) -> Self {
+        if let Some(pack) = &bundle {
+            if let Err(error) = pack.seed_new_profile() {
+                log::warn!("Bundled model defaults: {error}");
+            }
+        }
         Self::recover_previous_server();
         Self {
             inner: Mutex::new(Inner {
@@ -136,8 +144,10 @@ impl BackendManager {
                 process: None,
                 revision: 0,
                 op: "stopped",
+                start_error: None,
             }),
             cors_origin: cors_origin.to_string(),
+            bundle,
             shutdown_requested: AtomicBool::new(false),
         }
     }
@@ -232,6 +242,11 @@ impl BackendManager {
     /// URL externa a verificar: parâmetro explícito (do JS) > Settings > padrão.
     fn external_candidate(explicit: Option<String>) -> String {
         explicit
+            .or_else(|| {
+                let path = paths::config_dir().join("ui-settings.json");
+                crate::ui_settings::read(&path).ok()
+                    .and_then(|settings| settings["serverUrl"].as_str().map(str::to_owned))
+            })
             .or_else(|| Settings::load().external_url)
             .filter(|u| !u.trim().is_empty())
             .unwrap_or_else(|| DEFAULT_EXTERNAL_URL.to_string())
@@ -289,7 +304,10 @@ impl BackendManager {
         if settings.manual_stop {
             return Err(BackendError::ExternalUnavailable);
         }
-        if !engine::is_backend_installed() {
+        if settings.model_gguf.is_none() && settings.integrated_params.model.is_none() {
+            return Err(BackendError::NoModelSelected);
+        }
+        if self.bundle.is_none() && !engine::is_backend_installed() {
             return Err(BackendError::IntegratedNotInstalled);
         }
         {
@@ -309,9 +327,13 @@ impl BackendManager {
         }
         on_starting();
         let result = self.start_integrated();
-        if result.is_err() && !self.shutdown_requested.load(Ordering::SeqCst) {
-            let _ = Settings::load().update(|s| s.manual_stop = true);
-            self.inner.lock().unwrap().op = "error";
+        if let Err(error) = &result {
+            if !self.shutdown_requested.load(Ordering::SeqCst) {
+                let _ = Settings::load().update(|s| s.manual_stop = true);
+                let mut inner = self.inner.lock().unwrap();
+                inner.op = "error";
+                inner.start_error = Some(error.to_string());
+            }
         }
         self.bump_revision();
         result
@@ -340,18 +362,35 @@ impl BackendManager {
             .model_mmproj
             .clone()
             .or_else(|| settings.integrated_params.mmproj.clone());
+        let bundled_projector = mmproj.as_ref().is_some_and(|reference| reference == &Bundle::projector_ref());
+        let model = bundle::model_path(self.bundle.as_ref(), &model, true)
+            .map_err(BackendError::Start)?;
+        let mmproj = mmproj.as_deref()
+            .map(|reference| bundle::model_path(self.bundle.as_ref(), reference, true))
+            .transpose()
+            .map_err(BackendError::Start)?;
+        if !engine::is_backend_installed() {
+            if self.bundle.is_none() {
+                return Err(BackendError::IntegratedNotInstalled);
+            }
+            self.install_integrated(&AtomicBool::new(false), &|_| {})?;
+        }
         let port = match settings.integrated_params.port {
             Some(p) => p,
             None => pick_free_port().map_err(|e| BackendError::Process(e.to_string()))?,
         };
 
-        let args = engine::backend_serve_args(
-            std::path::Path::new(&model),
-            mmproj.as_deref().map(std::path::Path::new),
+        let mut args = engine::backend_serve_args(
+            &model,
+            mmproj.as_deref(),
             port,
             &settings.integrated_params,
             &self.cors_origin,
         );
+
+        if bundled_projector && settings.integrated_params.ngl == "0" {
+            args.push("--no-mmproj-offload".into());
+        }
 
         let lib_env = paths::backend_lib_dir().display().to_string();
         let server = RunningServer::start_with_env(
@@ -383,6 +422,7 @@ impl BackendManager {
         inner.process = Some(server);
         inner.active_url = Some(endpoint.clone());
         inner.op = "running";
+        inner.start_error = None;
         Ok((endpoint, BackendKind::Integrated))
     }
 
@@ -395,6 +435,7 @@ impl BackendManager {
         Self::remove_session_marker();
         inner.active_url = None;
         inner.op = "stopped";
+        inner.start_error = None;
     }
 
     /// Persiste a ativação do backend. Desabilitar também encerra apenas
@@ -446,7 +487,7 @@ impl BackendManager {
             self.inner.lock().unwrap().op = "stopped";
             return Err(BackendError::IntegratedDisabled);
         }
-        if !engine::is_backend_installed() {
+        if self.bundle.is_none() && !engine::is_backend_installed() {
             self.inner.lock().unwrap().op = "stopped";
             return Err(BackendError::IntegratedNotInstalled);
         }
@@ -459,7 +500,7 @@ impl BackendManager {
         }
 
         if activate && !settings.model_gguf.as_ref().or(settings.integrated_params.model.as_ref())
-            .is_some_and(|path| Path::new(path).is_file())
+            .is_some_and(|path| path == &Bundle::model_ref() || Path::new(path).is_file())
         {
             self.inner.lock().unwrap().op = "stopped";
             return Err(BackendError::NoModelSelected);
@@ -501,8 +542,8 @@ impl BackendManager {
             if matches!(inner.op, "starting" | "stopping") {
                 return Err(BackendError::OperationInProgress);
             }
-            Settings::load()
-                .update(apply)
+            let mut settings = Settings::load();
+            settings.update(apply)
                 .map_err(|e| BackendError::Process(e.to_string()))?;
             inner.revision += 1;
             let Some(mut process) = inner.process.take() else { return Ok(None); };
@@ -510,8 +551,16 @@ impl BackendManager {
             inner.active_url = None;
             process.stop();
             Self::remove_session_marker();
+            if settings.model_gguf.is_none() && settings.integrated_params.model.is_none() {
+                inner.op = "stopped";
+                return Ok(None);
+            }
         }
 
+        if Self::external_online(&Self::external_candidate(None)) {
+            self.inner.lock().unwrap().op = "stopped";
+            return Ok(None);
+        }
         let restart = self.start_integrated().map(|_| ());
         if restart.is_err() {
             let _ = Settings::load().update(|s| s.manual_stop = true);
@@ -535,12 +584,20 @@ impl BackendManager {
         cancel: &std::sync::atomic::AtomicBool,
         progress: &engine::ProgressFn,
     ) -> Result<omni_core::settings::IntegratedMeta, BackendError> {
-        let meta = engine::install_backend_managed(cancel, progress)
-            .map_err(|e| BackendError::Process(e.to_string()))?;
+        let archive = self.bundle.as_ref().map(Bundle::runtime);
+        let meta = engine::install_backend_from(archive.as_deref(), cancel, progress)
+            .map_err(|e| BackendError::Process(match &archive {
+                Some(path) => format!("{}: {e}", path.file_name().unwrap_or_default().to_string_lossy()),
+                None => e.to_string(),
+            }))?;
         Settings::load()
             .update(|s| s.integrated = Some(meta.clone()))
             .map_err(|e| BackendError::Process(format!("falha ao salvar versão instalada: {e}")))?;
         Ok(meta)
+    }
+
+    fn model_exists(&self, reference: &str) -> bool {
+        bundle::model_path(self.bundle.as_ref(), reference, false).is_ok_and(|path| path.is_file())
     }
 
     /// Snapshot oficial publicado no WebView (fonte única de verdade).
@@ -550,13 +607,14 @@ impl BackendManager {
         // Fazer a verificação externa apenas uma vez por snapshot. Antes,
         // current_selection() e este método repetiam a mesma sondagem de rede.
         let external_online = Self::external_online(&external);
-        let (revision, process_state, integrated_running, integrated_url) = {
+        let (revision, process_state, integrated_running, integrated_url, start_error) = {
             let inner = self.inner.lock().unwrap();
             (
                 inner.revision,
                 Self::process_state(&inner),
                 inner.process.is_some(),
                 inner.active_url.clone(),
+                inner.start_error.clone(),
             )
         };
         let (kind, active_url) = match compute_kind(external_online, integrated_running) {
@@ -598,10 +656,13 @@ impl BackendManager {
             "integratedDir": paths::backend_version_dir().display().to_string(),
             "integratedRunning": matches!(process_state, "running"),
             "installing": false,
-            "paramsModel": p.model,
-            "paramsMmproj": p.mmproj,
-            "modelExists": settings.model_gguf.as_deref().map(|s| std::path::Path::new(s).is_file()).unwrap_or(false),
-            "mmprojExists": settings.model_mmproj.as_deref().map(|s| std::path::Path::new(s).is_file()).unwrap_or(false),
+            "paramsModel": p.model.as_ref().or(settings.model_gguf.as_ref()),
+            "paramsMmproj": p.mmproj.as_ref().or(settings.model_mmproj.as_ref()),
+            "modelExists": p.model.as_ref().or(settings.model_gguf.as_ref()).is_some_and(|s| self.model_exists(s)),
+            "mmprojExists": p.mmproj.as_ref().or(settings.model_mmproj.as_ref()).is_some_and(|s| self.model_exists(s)),
+            "integratedStartError": start_error,
+            "bundledModel": self.bundle.as_ref().map(|_| Bundle::model_ref()),
+            "bundledProjector": self.bundle.as_ref().map(|_| Bundle::projector_ref()),
             "paramsNgl": p.ngl,
             "paramsCtk": p.cache_type_k,
             "paramsCtv": p.cache_type_v,

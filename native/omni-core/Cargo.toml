@@ -3,7 +3,7 @@ name = "omni-core"
 version.workspace = true
 edition.workspace = true
 description = "Omni Studio — núcleo independente de UI (estado, configurações, motor llama.cpp)"
-license = "Apache-2.0"
+license = "MIT"
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
