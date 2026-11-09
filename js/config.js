@@ -1,5 +1,5 @@
 // ============================================================
-// Configuração do usuário (persistida em localStorage)
+// Configuração do usuário
 // ============================================================
 
 export const DEFAULTS = {
@@ -56,25 +56,63 @@ export function migrateLegacyLanguageDefaults(s) {
   return next;
 }
 
-export function loadSettings() {
-  const base = { ...DEFAULTS };
-  let hadSaved = false;
+let nativeRpc;
+let nativeSettings;
+let settingsWrites = Promise.resolve();
+
+function readLocalSettings() {
   try {
-    const raw = localStorage.getItem(KEY);
-    if (raw) {
-      Object.assign(base, JSON.parse(raw));
-      hadSaved = true;
-    }
-  } catch { /* ignora */ }
-  const migrated = hadSaved ? migrateLegacyLanguageDefaults(base) : base;
-  const hadLegacyMaxTokens = Object.hasOwn(migrated, 'maxTokens');
-  const normalized = normalizeSettings(migrated);
-  if (hadSaved && (migrated !== base || hadLegacyMaxTokens)) saveSettings(normalized);
-  return normalized;
+    const saved = JSON.parse(localStorage.getItem(KEY));
+    if (saved && typeof saved === 'object' && !Array.isArray(saved)) return saved;
+  } catch { /* armazenamento local indisponível */ }
+  return null;
 }
 
-export function saveSettings(s) {
-  try { localStorage.setItem(KEY, JSON.stringify(s)); } catch { /* ignora */ }
+function settingsFrom(saved) {
+  const settings = { ...DEFAULTS };
+  for (const key of [...Object.keys(DEFAULTS), '_langMigrated']) {
+    if (saved && Object.hasOwn(saved, key)) settings[key] = saved[key];
+  }
+  return normalizeSettings(settings);
+}
+
+export async function initializeNativeSettings(rpc) {
+  nativeRpc = rpc;
+  const local = readLocalSettings();
+  nativeSettings = settingsFrom(local && migrateLegacyLanguageDefaults(local));
+  const reply = await rpc('ui-settings-get');
+  if (!reply.ok) return false;
+  if (reply.result != null) {
+    nativeSettings = settingsFrom(reply.result);
+    return true;
+  }
+  return !local || saveSettings(nativeSettings);
+}
+
+export function loadSettings() {
+  if (nativeSettings) return { ...nativeSettings };
+  const local = readLocalSettings();
+  const migrated = local && migrateLegacyLanguageDefaults(local);
+  const settings = settingsFrom(migrated);
+  if (local && (migrated !== local || Object.hasOwn(local, 'maxTokens'))) void saveSettings(settings);
+  return settings;
+}
+
+export async function saveSettings(next) {
+  const settings = settingsFrom({ ...next, _langMigrated: true });
+  if (!nativeRpc) {
+    try {
+      localStorage.setItem(KEY, JSON.stringify(settings));
+      return true;
+    } catch { return false; }
+  }
+  const write = settingsWrites.then(async () => {
+    const reply = await nativeRpc('ui-settings-save', { settings });
+    if (reply.ok) nativeSettings = settings;
+    return reply.ok;
+  });
+  settingsWrites = write.catch(() => false);
+  return settingsWrites;
 }
 
 function normalizeSettings(s) {

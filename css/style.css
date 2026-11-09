@@ -668,7 +668,6 @@ select option { background: var(--surface-2); color: var(--text); }
   pointer-events: none;
 }
 .toast {
-  pointer-events: auto;
   background: var(--surface-3);
   border: 1px solid var(--border);
   color: var(--text);

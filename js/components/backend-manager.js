@@ -7,7 +7,7 @@
 import { icon } from '../utils/icons.js';
 import { newRequestId } from '../utils/id.js';
 import { t } from '../i18n.js';
-import { loadSettings, saveSettings } from '../config.js';
+import { loadSettings } from '../config.js';
 
 function el(html) {
   const t = document.createElement('template');
@@ -363,7 +363,7 @@ export function openBackendManager({ onBack, onSettingsChanged } = {}) {
     bmCors: 'cors_origins', bmNoWebui: 'no_webui',
   };
 
-  modal.querySelector('#bmSaveServerUrl').addEventListener('click', () => {
+  modal.querySelector('#bmSaveServerUrl').addEventListener('click', async (event) => {
     const input = modal.querySelector('#bmServerUrl');
     const url = input.value.trim().replace(/\/+$/, '');
     if (!input.checkValidity() || !/^https?:\/\//i.test(url)) {
@@ -373,9 +373,13 @@ export function openBackendManager({ onBack, onSettingsChanged } = {}) {
       return;
     }
     const next = { ...loadSettings(), serverUrl: url };
-    saveSettings(next);
-    onSettingsChanged?.(next);
-    post('resolve', { externalUrl: url });
+    const button = event.currentTarget;
+    button.disabled = true;
+    try {
+      if (await onSettingsChanged?.(next)) post('resolve', { externalUrl: url });
+    } finally {
+      button.disabled = false;
+    }
   });
 
   const valueOf = (id) => {

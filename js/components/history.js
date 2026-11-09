@@ -198,8 +198,7 @@ export function openHistory({ onOpen, onDelete, onError }) {
       pin.setAttribute('aria-pressed', String(!!row.pinned));
       const remove = action('history.delete', 'trash', () => run(async () => {
         if (!confirm(t('history.confirmDelete', { title }))) return;
-        if (!(await onDelete(row.id))) return;
-        await call('delete', { id: row.id });
+        await onDelete(row.id, () => call('delete', { id: row.id }));
         await refresh();
         overlay.querySelector('[data-close]').focus();
       }));

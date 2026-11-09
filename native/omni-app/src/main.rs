@@ -9,6 +9,7 @@ mod backend_manager;
 mod hf_catalog;
 mod history;
 mod site_server;
+mod ui_settings;
 
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
@@ -382,6 +383,26 @@ fn build_ui(app: &gtk4::Application) {
                 Err(_) => None,
             };
             match cmd.as_str() {
+                "ui-settings-get" | "ui-settings-save" => {
+                    if let (Ok(request), Some(id)) = (parsed, request_id) {
+                        let path = omni_core::paths::config_dir().join("ui-settings.json");
+                        let result = if cmd == "ui-settings-get" {
+                            ui_settings::read(&path)
+                        } else {
+                            ui_settings::write(&path, &request["settings"])
+                                .map(|()| serde_json::Value::Null)
+                        };
+                        let reply = match result {
+                            Ok(value) => serde_json::json!({ "requestId": id, "ok": true, "result": value }),
+                            Err(error) => {
+                                log::warn!("UI settings: {error}");
+                                serde_json::json!({ "requestId": id, "ok": false, "code": "storage" })
+                            }
+                        };
+                        publish_command_result(&view, &reply);
+                    }
+                }
+
                 command if command.starts_with("history-") => {
                     if let (Ok(request), Some(id)) = (parsed, request_id) {
                         let store = history.clone();

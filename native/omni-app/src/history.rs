@@ -194,7 +194,9 @@ impl History {
                 fs::remove_dir_all(&dir)?;
                 let active = self.root.join("active.json");
                 if read_json(&active).ok().as_ref() == Some(&json!(id)) {
-                    write_json(&active, &Value::Null)?;
+                    if let Err(error) = write_json(&active, &Value::Null) {
+                        log::warn!("History active pointer cleanup: {error}");
+                    }
                 }
                 Ok(Value::Null)
             }

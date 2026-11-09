@@ -3,7 +3,7 @@
 // ============================================================
 
 import { icon } from '../utils/icons.js';
-import { loadSettings, saveSettings, SPOKEN_LANGUAGES } from '../config.js';
+import { loadSettings, SPOKEN_LANGUAGES } from '../config.js';
 import { openHfCatalog } from './hf-catalog.js';
 import { openBackendManager } from './backend-manager.js';
 import { applyTranslations } from '../i18n.js';
@@ -125,7 +125,9 @@ export function openSettings({ onSaved, focusBackend = false, focusCatalog = fal
   const esc = (e) => { if (e.key === 'Escape') close(); };
   modal.addEventListener('keydown', esc);
 
-  modal.querySelector('[data-save]').addEventListener('click', () => {
+  modal.querySelector('[data-save]').addEventListener('click', async (event) => {
+    const button = event.currentTarget;
+    button.disabled = true;
     const next = {
       ...settings,
       theme: modal.querySelector('#set-theme').value,
@@ -135,9 +137,11 @@ export function openSettings({ onSaved, focusBackend = false, focusCatalog = fal
       ttsVoice: modal.querySelector('#set-voice').value,
       autoSpeak: modal.querySelector('#set-auto-speak').checked,
     };
-    saveSettings(next);
-    onSaved?.(next);
-    close();
+    try {
+      if (await onSaved?.(next)) close();
+    } finally {
+      button.disabled = false;
+    }
   });
 
   // Gerenciar backends: abre o modal HTML (dentro do WebView).

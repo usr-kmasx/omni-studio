@@ -1,4 +1,4 @@
-import { DEFAULTS, loadSettings, saveSettings } from '../js/config.js';
+import { DEFAULTS, initializeNativeSettings, loadSettings, saveSettings } from '../js/config.js';
 import { t, setLocale, getLocale, availableLocales, missingTranslationKeys } from '../js/i18n.js';
 import { applyTheme, resolveTheme, themes } from '../js/theme.js';
 
@@ -52,4 +52,30 @@ check(t('settings.title') === 'Paramètres', 'translations use selected locale')
 setLocale('unsupported');
 check(getLocale() === 'en', 'unsupported locales fall back to English');
 
+for (const language of availableLocales) {
+  setLocale(language);
+  check(t('status.unavailable').includes(t('settings.backend')), `${language} offline hint names the server manager`);
+}
+
+store.set('lfm3-omni-ui-settings', JSON.stringify({ uiLanguage: 'fr', theme: 'nord', unrelated: 'ignored' }));
+let nativeFile = null;
+let failWrite = false;
+const nativeRpc = async (cmd, payload) => {
+  if (cmd === 'ui-settings-get') return { ok: true, result: nativeFile };
+  if (failWrite) return { ok: false, code: 'storage' };
+  nativeFile = payload.settings;
+  return { ok: true };
+};
+check(await initializeNativeSettings(nativeRpc), 'native first run migrates readable same-origin settings');
+check(nativeFile.uiLanguage === 'fr' && nativeFile.theme === 'nord', 'legacy values were written to the native file');
+check(!('unrelated' in nativeFile) && nativeFile.ttsLang === 'auto', 'native settings store known keys and defaults');
+store.clear();
+check(await initializeNativeSettings(nativeRpc), 'new origin loads the existing native file');
+check(loadSettings().uiLanguage === 'fr', 'native settings survive a change of origin');
+failWrite = true;
+check(!(await saveSettings({ ...loadSettings(), theme: 'light' })), 'save reports storage failure');
+check(loadSettings().theme === 'nord', 'failed save keeps the last saved preferences');
+failWrite = false;
+check(await saveSettings({ ...loadSettings(), theme: 'light' }), 'native write queue allows retry');
+check(nativeFile.theme === 'light', 'retry replaces the native preferences');
 console.log('=== UI PREFERENCES OK ===');

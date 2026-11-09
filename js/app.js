@@ -3,7 +3,7 @@
 // Interface web para LFM3-Omni-2B via llama.cpp (local)
 // ============================================================
 
-import { loadSettings, saveSettings, asrLanguageName } from './config.js';
+import { initializeNativeSettings, loadSettings, saveSettings, asrLanguageName } from './config.js';
 import { icon } from './utils/icons.js';
 import { appToast } from './utils/toast.js';
 import { checkHealth, fetchModelInfo, fetchProps, summarizeError, apiGet } from './api/client.js';
@@ -38,6 +38,7 @@ import { applyTheme } from './theme.js';
 import { installKeyboardFocus } from './utils/keyboard-focus.js';
 
 // ---------- estado ----------
+const settingsReady = !historyAvailable() || await initializeNativeSettings(backendRpc);
 const settings = loadSettings();
 setLocale(settings.uiLanguage);
 applyTheme(settings.theme);
@@ -671,7 +672,9 @@ function historyError() {
 }
 
 function persistConversation(conversation = state.textConv) {
-  if (!historyAvailable() || !conversation.some((message) => message.role === 'user')) return historyWrites;
+  if (!historyAvailable() || !conversation.some((message) => message.role === 'user')) {
+    return Promise.resolve(true);
+  }
   let id = historyIds.get(conversation);
   if (!id) {
     id = newHistoryId();
@@ -686,9 +689,11 @@ function persistConversation(conversation = state.textConv) {
     await saveHistory(id, snapshot);
     if (conversation === state.textConv) await setActiveHistory(id);
     historyErrorShown = false;
+    return true;
   }).catch(() => {
     if (!historyErrorShown) historyError();
     historyErrorShown = true;
+    return false;
   });
   return historyWrites;
 }
@@ -743,18 +748,21 @@ function restoreConversation(chat) {
   scrollBottom();
 }
 
-async function switchConversation(id, confirmActivity = true) {
+async function switchConversation(id) {
   if (historySwitching) return false;
   if (id && id === historyIds.get(state.textConv)) return true;
   const active = state.busy || state.rt || liveStarting || state.generating || state.voicePlayer?.playing;
-  if (active && confirmActivity && !confirm(t('history.confirmSwitch'))) return false;
+  if (active && !confirm(t('history.confirmSwitch'))) return false;
   historySwitching = true;
   try {
     state.abort?.abort();
     closeVoiceSession();
     await pendingChat;
     await liveClosing;
-    await persistConversation();
+    if (!(await persistConversation())) {
+      appToast(t('history.retrySave'), 'error');
+      return false;
+    }
     const chat = id ? await loadHistory(id) : null;
     if (historyAvailable()) await setActiveHistory(id);
     restoreConversation(chat);
@@ -1429,15 +1437,18 @@ function cancelVoiceResponse() {
 }
 
 // ---------- configurações ----------
-function applySettings(next) {
+async function applySettings(next) {
+  if (!(await saveSettings(next))) {
+    appToast(t('settings.saveFailed'), 'error');
+    return false;
+  }
   const previousUrl = settings.serverUrl;
   Object.assign(settings, next);
   if (previousUrl !== settings.serverUrl) endVoiceSession();
-  saveSettings(settings);
   setLocale(settings.uiLanguage);
   applyTheme(settings.theme);
   refreshStatus();
-
+  return true;
 }
 
 // ---------- luz de fundo (lightbox) ----------
@@ -1455,10 +1466,23 @@ document.getElementById('btnHistory').addEventListener('click', () => {
   if (historySwitching) return;
   openHistory({
     onOpen: (id) => switchConversation(id),
-    onDelete: async (id) => {
-      if (id === historyIds.get(state.textConv)) return switchConversation(null, false);
-      await historyWrites;
-      return true;
+    onDelete: async (id, remove) => {
+      if (historySwitching) return;
+      historySwitching = true;
+      try {
+        const isActive = id === historyIds.get(state.textConv);
+        if (isActive) {
+          state.abort?.abort();
+          closeVoiceSession();
+          await pendingChat;
+          await liveClosing;
+        }
+        await historyWrites;
+        await remove();
+        if (isActive) restoreConversation(null);
+      } finally {
+        historySwitching = false;
+      }
     },
     onError: historyError,
   });
@@ -1490,6 +1514,7 @@ function init() {
   renderServerControl();
   refreshStatus();
   healthTimer = setInterval(refreshStatus, 5000);
+  if (!settingsReady) appToast(t('settings.loadFailed'), 'error');
   void restoreSavedHistory();
   if (historyAvailable()) setInterval(() => {
     expireVisibleMedia();
