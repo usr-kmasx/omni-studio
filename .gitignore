@@ -1,0 +1,31 @@
+# --- Omni Studio — Part 1 stable baseline ---
+# Itens que NÃO devem entrar no versionamento (GGUF, segredos,
+# logs, caches, temporários e dependências geradas).
+
+# Modelos (GGUF e afins)
+*.gguf
+models/
+
+# Credenciais / segredos
+.env
+.env.*
+*.pem
+*.key
+*.crt
+
+# Logs e caches
+*.log
+*.cache
+.cache/
+.DS_Store
+
+# Dependências e builds geradas
+node_modules/
+dist/
+build/
+
+# Temporários e artefatos locais
+*.tmp
+*.swp
+*~
+nohup.out

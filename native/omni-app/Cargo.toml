@@ -1,0 +1,23 @@
+[package]
+name = "omni-app"
+version.workspace = true
+edition.workspace = true
+description = "Omni Studio — janela GTK4 executando o site original via WebKitGTK"
+license = "Apache-2.0"
+
+[dependencies]
+omni-core = { path = "../omni-core" }
+
+# GTK4 (gtk4-rs) + WebKitGTK 6.0 (webkit6-rs), família de versões do projeto.
+gtk4 = { version = "0.11", features = ["v4_10"] }
+glib = "0.22"
+webkit6 = "0.6.1"
+
+# Registro de logs.
+env_logger = "0.11"
+log = "0.4"
+
+# JSON para a ponte JS ↔ Rust (estado do gerenciador de backends).
+serde_json = "1"
+base64 = "0.23"
+serde = { version = "1", features = ["derive"] }

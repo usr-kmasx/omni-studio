@@ -1,0 +1,20 @@
+[package]
+name = "omni-core"
+version.workspace = true
+edition.workspace = true
+description = "Omni Studio — núcleo independente de UI (estado, configurações, motor llama.cpp)"
+license = "Apache-2.0"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+dirs = "6"
+ureq = { version = "3", default-features = false, features = ["rustls", "gzip", "json"] }
+flate2 = "1"
+tar = "0.4"
+sha2 = "0.10"
+hex = "0.4"
+tempfile = "3"
+libc = "0.2"
+log = "0.4"
+thiserror = "2"
