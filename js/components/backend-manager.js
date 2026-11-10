@@ -104,66 +104,63 @@ export function openBackendManager({ onBack, onSettingsChanged } = {}) {
   const installed = !!s.integratedInstalled;
   const enabled = !!s.integratedEnabled;
   const running = !!s.integratedRunning;
-  const installing = !!s.installing;
 
   const modal = el(`
     <div class="modal-overlay">
-      <div class="modal modal--tall" role="dialog" aria-modal="true" aria-labelledby="bmTitle">
-        <div class="modal-head">
-          <h3 id="bmTitle">${t('backend.title')}</h3>
-          <div style="display:flex;gap:8px">
-            <button class="icon-btn" data-bm-back type="button" title="${t('backend.back')}">${icon('gear', 16)}</button>
-            <button class="icon-btn" data-close type="button" title="${t('backend.close')}">${icon('close')}</button>
+      <div class="modal modal--tall omni-panel llama-panel" role="dialog" aria-modal="true" aria-labelledby="bmTitle">
+        <div class="modal-head omni-panel-header">
+          <button class="btn omni-panel-icon" data-bm-back data-dialog-focus type="button" title="${t('backend.back')}" aria-label="${t('backend.back')}">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m12 5-7 7 7 7M5 12h14"/></svg>
+          </button>
+          <h3 id="bmTitle">${icon('server', 19)} ${t('backend.title')}</h3>
+          <div class="bm-hint bm-current-model" id="bmCurrentModel" hidden>
+            <span>${t('status.modelLoaded')}</span> · <b id="bmCurrentModelName"></b>
           </div>
+          <button class="btn omni-panel-icon" data-close type="button" title="${t('backend.close')}" aria-label="${t('backend.close')}">${icon('close')}</button>
         </div>
 
         <div class="modal-body">
-          <!-- Servidor local -->
-          <div class="bm-section">
-            <div class="bm-title"><span class="dot ${dotClass(!!s.externalOnline)}" id="bmExtDot"></span> ${t('backend.external')}</div>
-            <div>
-              ${field('bmServerUrl', t('settings.serverAddress'), settings.serverUrl, 'http://127.0.0.1:8080', 'url', { required: true })}
-            </div>
+          <section class="bm-section">
             <div class="bm-row">
-              <button class="btn" id="bmSaveServerUrl" type="button">${t('settings.save')}</button>
+              <h4 class="bm-title">${t('backend.external')}</h4>
             </div>
-            <div class="bm-meta">
-              <span>${t('backend.state')}: <span id="bmExtStatus" class="bm-status" style="color:${s.externalOnline ? '#4ade80' : '#f87171'}">${statusLabel(!!s.externalOnline)}</span></span>
+            <div class="bm-address">
+              ${field('bmServerUrl', t('settings.serverAddress'), settings.serverUrl, 'http://127.0.0.1:8080', 'url', { required: true })}
+              <button class="btn" id="bmSaveServerUrl" type="button">${t('settings.save')}</button>
+              <span class="bm-local-state"><span class="dot ${dotClass(!!s.externalOnline)}" id="bmExtDot" aria-hidden="true"></span><span id="bmExtStatus" class="bm-status">${statusLabel(!!s.externalOnline)}</span></span>
             </div>
             <div class="bm-hint">${t('backend.externalHint')}</div>
-          </div>
+          </section>
 
-          <!-- llama.cpp do Omni Studio -->
-          <div class="bm-section">
-            <div class="bm-title"><span class="dot ${dotClass(enabled)}" id="bmIntDot"></span> ${t('backend.integrated')}</div>
+          <section class="bm-section">
+            <div class="bm-row">
+              <h4 class="bm-title"><span class="dot ${dotClass(enabled)}" id="bmIntDot" aria-hidden="true"></span> ${t('backend.integrated')}</h4>
+              <label class="check-row"><input type="checkbox" class="switch" id="bmSwitch" ${enabled ? 'checked' : ''}> ${t('backend.active')}</label>
+            </div>
             <div class="bm-row">
               <div class="bm-meta">
-                <span>${t('backend.installation')} <b id="bmInstalled">${installed ? t('backend.installed') : t('backend.notInstalled')}</b></span>
-                <span>${t('backend.activation')} <b id="bmEnabled">${enabled ? t('backend.enabled') : t('backend.disabled')}</b> · ${t('backend.process')} <b id="bmRunning">${running ? t('backend.running') : (installing ? t('backend.installing') : t('backend.stopped'))}</b></span>
-                <span>${t('backend.version')} <b id="bmVersion">${escapeHtml(s.integratedVersion || '—')}</b> · ${t('backend.variant')} <b>linux-x64-vulkan</b></span>
-                <span>${t('backend.folder')} <b id="bmDir">${escapeHtml(s.integratedDir || '—')}</b></span>
+                <span class="bm-status" id="bmProcessState">${t('backend.checking')}</span>
+                <span>${t('backend.installation')} <b id="bmInstalled">${installed ? t('backend.installed') : t('backend.notInstalled')}</b> · ${t('backend.version')} <b id="bmVersion">${escapeHtml(s.integratedVersion || '—')}</b> · <b>linux-x64-vulkan</b></span>
+                <span class="bm-runtime-path" ${s.integratedDir ? '' : 'hidden'}>${t('backend.folder')} <b id="bmDir">${escapeHtml(s.integratedDir || '—')}</b></span>
               </div>
-              <label class="check-row"><input type="checkbox" class="switch" id="bmSwitch" ${enabled ? 'checked' : ''}> ${t('backend.active')}</label>
-              <span class="bm-hint" id="bmSwitchError" role="status" aria-live="polite"></span>
-            </div>
-            <div class="bm-row">
-              <span class="bm-status" id="bmProcessState">${t('backend.checking')}</span>
-              <div style="display:flex;gap:8px">
+              <div class="bm-inline-actions">
                 <button class="btn bm-process-btn bm-start" id="bmStart" type="button" style="display:none" disabled>${icon('play', 13)} <span>${t('backend.start')}</span></button>
                 <button class="btn bm-process-btn bm-stop" id="bmStop" type="button" style="display:none" disabled>${icon('square', 13)} <span>${t('backend.stop')}</span></button>
+                <button class="btn" id="bmInstall" type="button" style="${installed ? 'display:none' : ''}">${t('backend.install')}</button>
+                <button class="btn bm-danger" id="bmDelete" type="button" style="${installed && !enabled && !running ? '' : 'display:none'}">${t('backend.delete')}</button>
               </div>
             </div>
-            <div class="bm-row">
-              <button class="btn" id="bmInstall" type="button" style="${installed ? 'display:none' : ''}">${t('backend.install')}</button>
-              <button class="btn bm-danger" id="bmDelete" type="button" style="${installed && !enabled && !running ? '' : 'display:none'}">${t('backend.delete')}</button>
+            <div class="bm-process-meta">
               <span class="bm-progress" id="bmProgress"></span>
+              <span class="bm-hint" id="bmSwitchError" role="status" aria-live="polite"></span>
             </div>
-          </div>
+          </section>
 
-          <!-- Parâmetros -->
-          <div class="bm-section">
-            <div class="bm-title">${t('backend.files')}</div>
-            <button class="btn" id="bmBundledModel" type="button" hidden>${t('backend.useBundledModel')}</button>
+          <section class="bm-section">
+            <div class="bm-row">
+              <h4 class="bm-title">${t('backend.files')}</h4>
+              <button class="btn" id="bmBundledModel" type="button" hidden>${t('backend.useBundledModel')}</button>
+            </div>
 
             <div class="bm-file-row">
               <div class="bm-file-info">
@@ -186,19 +183,19 @@ export function openBackendManager({ onBack, onSettingsChanged } = {}) {
                 <button class="btn bm-danger" id="bmClearMm" type="button" style="display:none">${t('backend.clear')}</button>
               </div>
             </div>
-          </div>
+          </section>
 
-          <div class="bm-section">
-            <div class="bm-title">${t('backend.gpu')}</div>
+          <details class="bm-section bm-advanced">
+            <summary class="bm-title">${t('backend.gpu')}</summary>
             <div class="bm-grid">
               ${field('bmNgl', t('backend.gpuLayers'), s.paramsNgl ?? 'all', 'all | auto | <n>')}
               ${field('bmThreads', t('backend.threads'), s.paramsThreads ?? '', '<n>', 'number', { min: 1, max: 4294967295 })}
               ${field('bmThreadsBatch', t('backend.batchThreads'), s.paramsThreadsBatch ?? '', '<n>', 'number', { min: 1, max: 4294967295 })}
             </div>
-          </div>
+          </details>
 
-          <div class="bm-section">
-            <div class="bm-title">${t('backend.memory')}</div>
+          <details class="bm-section bm-advanced">
+            <summary class="bm-title">${t('backend.memory')}</summary>
             <div class="bm-grid">
               ${field('bmCtx', t('backend.context'), s.paramsCtx ?? '32768', '<n>', 'number', { min: 1024, max: 4294967295, required: true })}
               ${field('bmBatch', t('backend.batch'), s.paramsBatch ?? '', '<n>', 'number', { min: 1, max: 4294967295 })}
@@ -207,10 +204,10 @@ export function openBackendManager({ onBack, onSettingsChanged } = {}) {
               ${field('bmCtv', t('backend.cacheV'), s.paramsCtv ?? 'q4_0', 'f16 | q8_0 | q4_0')}
               ${field('bmFa', t('backend.flashAttention'), s.paramsFa ?? 'auto', 'on | off | auto')}
             </div>
-          </div>
+          </details>
 
-          <div class="bm-section">
-            <div class="bm-title">${t('backend.server')}</div>
+          <details class="bm-section bm-advanced">
+            <summary class="bm-title">${t('backend.server')}</summary>
             <div class="bm-grid">
               ${field('bmHost', t('backend.host'), s.paramsHost ?? '127.0.0.1')}
               ${field('bmPort', t('backend.port'), s.paramsPort ?? '', '<port>', 'number', { min: 1, max: 65535 })}
@@ -219,7 +216,7 @@ export function openBackendManager({ onBack, onSettingsChanged } = {}) {
               ${field('bmCors', t('backend.cors'), s.paramsCors ?? '', 'exact origin')}
             </div>
             <label class="check-row"><input type="checkbox" id="bmNoWebui" ${s.paramsNoWebui === false ? '' : 'checked'}> ${t('backend.noWebui')}</label>
-          </div>
+          </details>
           <div id="bmParamError" class="bm-hint" role="status" aria-live="polite" style="color:var(--red)"></div>
 
         </div>
@@ -244,7 +241,18 @@ export function openBackendManager({ onBack, onSettingsChanged } = {}) {
   let savingParams = false;
   const fileDraft = new Map();
 
+  const sourceModel = document.getElementById('modelLabel');
+  const currentModel = modal.querySelector('#bmCurrentModel');
+  const currentModelName = modal.querySelector('#bmCurrentModelName');
+  function refreshCurrentModel() {
+    const loadedName = sourceModel && !sourceModel.dataset.i18n ? sourceModel.textContent.trim() : '';
+    currentModel.hidden = !loadedName;
+    if (currentModelName.textContent !== loadedName) currentModelName.textContent = loadedName;
+    currentModelName.title = loadedName;
+  }
+
   const refresh = () => {
+    refreshCurrentModel();
     const st = state();
     const inst = !!st.integratedInstalled;
     const en = !!st.integratedEnabled;
@@ -259,12 +267,13 @@ export function openBackendManager({ onBack, onSettingsChanged } = {}) {
     if (extStatus) {
       const online = !!st.externalOnline;
       extStatus.textContent = statusLabel(online);
-      extStatus.style.color = online ? '#4ade80' : '#f87171';
+      extStatus.classList.toggle('bm-local-online', online);
     }
     setText('bmInstalled', inst ? t('backend.installed') : t('backend.notInstalled'));
-    setText('bmEnabled', en ? t('backend.enabled') : t('backend.disabled'));
     setText('bmVersion', st.integratedVersion || '—');
-    setText('bmDir', st.integratedDir || '—');
+    const dir = modal.querySelector('#bmDir');
+    dir.textContent = st.integratedDir || '—';
+    dir.parentElement.hidden = !st.integratedDir;
     const sw = modal.querySelector('#bmSwitch');
     if (sw) {
       if (!switchPending && sw.checked !== en) sw.checked = en;
@@ -283,13 +292,9 @@ export function openBackendManager({ onBack, onSettingsChanged } = {}) {
     const btnStart = modal.querySelector('#bmStart');
     const btnStop = modal.querySelector('#bmStop');
     const busyOp = pst === 'starting' || pst === 'stopping';
-    const processKey = {
-      starting: 'backend.starting', stopping: 'backend.stopping',
-      running: 'backend.running', error: 'backend.serverError',
-    }[pst];
-    setText('bmRunning', t(processKey || (instg ? 'backend.installing' : 'backend.stopped')));
     let procLabel;
-    if (!known) {
+    if (instg) procLabel = t('backend.installing');
+    else if (!known) {
       procLabel = statusFailed ? t('backend.statusUnavailable') : t('backend.checking');
     } else if (pst === 'running') procLabel = t('backend.serverRunning');
     else if (pst === 'stopped') procLabel = t('backend.serverStopped');
@@ -442,7 +447,10 @@ export function openBackendManager({ onBack, onSettingsChanged } = {}) {
       const error = validationError(id);
       if (error) {
         saveStatus.textContent = t(error);
-        modal.querySelector('#' + id).focus();
+        const input = modal.querySelector('#' + id);
+        const group = input.closest('details');
+        if (group) group.open = true;
+        input.focus();
         return;
       }
       const value = valueOf(id);
@@ -669,6 +677,12 @@ export function openBackendManager({ onBack, onSettingsChanged } = {}) {
   // A atualização é limitada a uma consulta em andamento por vez.
   let lastSnap = JSON.stringify(state());
   timer = setInterval(() => {
+    if (!modal.isConnected) {
+      clearInterval(timer);
+      timer = null;
+      return;
+    }
+    refreshCurrentModel();
     const cur = JSON.stringify(state());
     if (cur !== lastSnap) {
       lastSnap = cur;

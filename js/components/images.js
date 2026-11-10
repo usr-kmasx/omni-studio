@@ -1,11 +1,13 @@
+import { icon } from '../utils/icons.js';
 import { backendRpc } from './backend-manager.js';
 import { applyTranslations, t } from '../i18n.js';
+import { imageDefaults, imageFields, imageGenerationPayload } from '../api/image-generation.js';
+import { imageChatLabel } from './image-chat-labels.js';
 
 const desktop = () => !!window.webkit?.messageHandlers?.['omni-backend'];
 const rpc = (command, args = {}, timeout) => backendRpc(`image-${command}`, args, timeout);
 let snapshot = {};
 let polling = false;
-let refreshWorkspace = () => {};
 let refreshDialog = () => {};
 
 async function refresh() {
@@ -14,9 +16,8 @@ async function refresh() {
   try {
     const reply = await rpc('status', {}, 3000);
     if (reply.ok) snapshot = reply.result;
-    refreshWorkspace();
     refreshDialog();
-  } finally {
+  } catch { /* A later status refresh can retry. */ } finally {
     polling = false;
   }
 }
@@ -63,19 +64,140 @@ function showError(element, reply) {
 
 const dialogLabels = (title) => ({ title: t(title), accept: t('settings.save'), cancel: t('settings.cancel') });
 
-export function mountImageWorkspace() {
-  const host = document.getElementById('imageArea');
-  const chat = document.getElementById('chatArea');
-  const composer = document.getElementById('composerHost');
-  const chatTab = document.getElementById('chatTab');
-  const imageTab = document.getElementById('imageTab');
-  const chatControls = ['btnNewChat', 'statusChip', 'modelLabel'].map((id) => document.getElementById(id));
-  host.innerHTML = `
-    <section class="image-workspace">
-      <form class="image-controls">
-        <h2 data-i18n="image.title"></h2>
-        <label for="imagePrompt" data-i18n="image.prompt"></label>
-        <textarea id="imagePrompt" required maxlength="4096" rows="4"></textarea>
+let legacyDraft;
+async function savedGeneration(state) {
+  if (state?.generation) return state.generation;
+  legacyDraft ??= backendRpc('draft-image-get').then(({ ok, result }) => {
+    if (!ok || !result) return null;
+    const migrated = Object.fromEntries(Object.keys(imageDefaults)
+      .filter((name) => typeof result[name] === 'string').map((name) => [name, result[name]]));
+    try { return imageGenerationPayload(migrated); }
+    catch { return null; }
+  }).catch(() => null);
+  const legacy = await legacyDraft;
+  if (!legacy) return imageGenerationPayload();
+  const reply = await rpc('migrate-generation', { parameters: legacy }).catch(() => null);
+  return reply?.ok && reply.result ? reply.result : legacy;
+}
+
+function imageError(reply) {
+  const label = document.createElement('span');
+  showError(label, reply);
+  return label.textContent;
+}
+
+export async function generateChatImage(prompt, { signal, onProgress }) {
+  if (!desktop()) throw new Error(t('image.desktop'));
+  const status = await rpc('status');
+  if (!status.ok) throw new Error(imageError(status));
+  snapshot = status.result;
+  if (signal.aborted) return null;
+  if (!snapshot.installed || !snapshot.configured || snapshot.installing || snapshot.busy) {
+    throw new Error(stateLabel());
+  }
+  const parameters = await savedGeneration(snapshot);
+  if (signal.aborted) return null;
+  onProgress({ label: t('image.generating') });
+
+  let done = false;
+  let cancelSent = false;
+  async function tick() {
+    if (done) return;
+    try {
+      const reply = await rpc('status', {}, 3000);
+      if (done) return;
+      if (reply.ok) {
+        snapshot = reply.result;
+        if (signal.aborted && snapshot.busy && !cancelSent) {
+          cancelSent = true;
+          const response = await rpc('cancel');
+          if (!response.ok) cancelSent = false;
+        }
+        if (!done) {
+          const { completed, total } = snapshot.progress || {};
+          onProgress({
+            label: signal.aborted ? t('image.cancelling') : snapshot.busy ? stateLabel() : t('image.generating'),
+            completed, total,
+          });
+        }
+      }
+    } catch { cancelSent = false; }
+    if (!done) timer = setTimeout(tick, 350);
+  }
+  let timer = setTimeout(tick, 0);
+  try {
+    const reply = await rpc('generate', { ...parameters, prompt }, 0);
+    if (signal.aborted || reply.result?.cancelled) return null;
+    if (!reply.ok || reply.result?.error || !reply.result?.png) throw new Error(imageError(reply));
+    return {
+      kind: 'image', name: 'omni-image.png', mime: 'image/png',
+      dataUrl: 'data:image/png;base64,' + reply.result.png,
+    };
+  } finally {
+    done = true;
+    clearTimeout(timer);
+    void refresh();
+  }
+}
+
+export async function exportChatImage(media) {
+  const png = /^data:image\/png;base64,([A-Za-z0-9+/=]+)$/.exec(media.dataUrl || '')?.[1];
+  if (!png) throw new Error(t('image.failed'));
+  const reply = await rpc('export', { ...dialogLabels('image.export'), png }, 0);
+  if (!reply.ok) throw new Error(imageError(reply));
+}
+
+export function openImageSettings(onBack) {
+  const host = document.getElementById('modalHost');
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.innerHTML = `
+    <section class="modal modal--tall omni-panel image-settings" role="dialog" aria-modal="true" aria-labelledby="imageSettingsTitle">
+      <div class="modal-head omni-panel-header">
+        <button class="btn omni-panel-icon" type="button" data-back data-dialog-focus data-i18n-title="backend.back" data-i18n-aria="backend.back"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m12 5-7 7 7 7M5 12h14"/></svg></button>
+        <h3>${icon('image', 20)} <span id="imageSettingsTitle" data-i18n="image.settings"></span></h3>
+        <button class="btn omni-panel-icon" type="button" data-close data-i18n-title="settings.close" data-i18n-aria="settings.close">${icon('close', 18)}</button>
+      </div>
+      <div class="modal-body">
+        <section class="image-settings-card image-backend-card">
+          <div>
+            <strong>${imageChatLabel('backend')}</strong>
+            <div class="image-backend-meta"><span class="image-state-dot" aria-hidden="true"></span><span role="status"></span><small data-version></small></div>
+          </div>
+          <div class="image-settings-actions">
+            <button class="btn" type="button" data-install data-i18n="image.install"></button>
+            <button class="btn" type="button" data-stop data-i18n="image.stop"></button>
+          </div>
+        </section>
+        <section class="image-settings-card image-settings-grid">
+          <div class="field">
+            <label for="imageDevice" data-i18n="image.device"></label>
+            <select id="imageDevice"><option value="cpu">CPU</option><option value="vulkan">Vulkan</option></select>
+          </div>
+          <div class="field">
+            <label for="imageModelMode" data-i18n="image.modelType"></label>
+            <select id="imageModelMode">
+              <option value="checkpoint" data-i18n="image.checkpoint"></option>
+              <option value="components" data-i18n="image.components"></option>
+            </select>
+          </div>
+        </section>
+        <section class="image-settings-card image-model-card">
+          <strong>${imageChatLabel('model')}</strong>
+          <div class="image-weight-row" data-checkpoint>
+            <div><span data-i18n="image.checkpoint"></span><b data-path="model"></b></div>
+            <button class="btn" type="button" data-weight="model" data-i18n="image.choose"></button>
+          </div>
+          <div data-components hidden>
+            ${['diffusion', 'encoder', 'vae'].map((part) => `
+              <div class="image-weight-row">
+                <div><span data-i18n="image.${part}"></span><b data-path="${part}"></b></div>
+                <button class="btn" type="button" data-weight="${part}" data-i18n="backend.choose"></button>
+              </div>`).join('')}
+          </div>
+        </section>
+        <form class="image-settings-card image-generation-options">
+          <strong>${imageChatLabel('parameters')}</strong>
         <div class="image-fields">
           <label><span data-i18n="image.width"></span>
             <input id="imageWidth" type="number" value="512" min="1" step="1" required>
@@ -112,192 +234,11 @@ export function mountImageWorkspace() {
             <small id="imageSigmasHint" data-i18n="image.sigmasHint"></small>
           </div>
         </details>
-        <div class="image-actions">
-          <button class="btn primary" type="submit" data-i18n="image.generate"></button>
-          <button class="btn" type="button" data-cancel data-i18n="settings.cancel" hidden></button>
-        </div>
-        <p role="status"></p>
-        <progress aria-label="${t('image.generating')}" data-i18n-aria="image.generating" hidden></progress>
-        <p role="alert"></p>
-        <p role="status" data-draft-status></p>
-      </form>
-      <div class="image-preview">
-        <p data-preview-empty data-i18n="image.empty"></p>
-        <figure hidden>
-          <img alt="${t('image.preview')}">
-          <button class="btn" type="button" data-export data-i18n="image.export"></button>
-        </figure>
-      </div>
-    </section>`;
-  applyTranslations(host);
-  const form = host.querySelector('form');
-  const button = form.querySelector('[type=submit]');
-  const cancel = form.querySelector('[data-cancel]');
-  const status = host.querySelector('[role=status]');
-  const error = host.querySelector('[role=alert]');
-  const progress = host.querySelector('progress');
-  const figure = host.querySelector('figure');
-  const empty = host.querySelector('[data-preview-empty]');
-  const preview = figure.querySelector('img');
-  const save = figure.querySelector('[data-export]');
-  if (desktop()) {
-    const fields = [...form.querySelectorAll('input[id], textarea[id], select[id]')];
-    const draftStatus = form.querySelector('[data-draft-status]');
-    let version = 0;
-    const persist = async () => {
-      const current = ++version;
-      const settings = Object.fromEntries(fields.map(({ id, value }) => [id, value]));
-      const reply = await backendRpc('draft-image-save', { settings });
-      if (current === version) draftStatus.textContent = reply.ok ? '' : t('settings.saveFailed');
-    };
-    void backendRpc('draft-image-get').then(({ ok, result }) => {
-      if (version) return;
-      if (!ok) draftStatus.textContent = t('settings.loadFailed');
-      for (const field of fields) {
-        const value = result?.[field.id];
-        if (typeof value === 'string') field.value = value;
-      }
-    });
-    form.addEventListener('input', persist);
-  }
-  let pending = false;
-  let cancelling = false;
-  let outputUrl;
-  const paint = () => {
-    const message = cancelling ? t('image.cancelling') : pending && !snapshot.busy ? t('image.generating') : stateLabel();
-    if (status.textContent !== message) status.textContent = message;
-    button.disabled = !desktop() || !snapshot.installed || !snapshot.configured || snapshot.installing || snapshot.busy || pending;
-    cancel.hidden = !pending && !snapshot.busy;
-    cancel.disabled = cancelling || !snapshot.busy;
-    progress.hidden = !pending && !snapshot.busy;
-    if (snapshot.progress?.total > 0 && !cancelling) {
-      progress.max = snapshot.progress.total;
-      progress.value = snapshot.progress.completed || 0;
-    } else progress.removeAttribute('value');
-  };
-  refreshWorkspace = paint;
-  function select(images) {
-    host.hidden = !images;
-    chat.hidden = images;
-    composer.hidden = images;
-    chatControls.forEach((control) => { control.hidden = images; });
-    for (const [tab, selected] of [[chatTab, !images], [imageTab, images]]) {
-      tab.classList.toggle('active', selected);
-      tab.setAttribute('aria-selected', String(selected));
-    }
-    if (images) { paint(); void refresh(); }
-  }
-  chatTab.addEventListener('click', () => select(false));
-  document.getElementById('btnHistory').addEventListener('click', () => select(false), { capture: true });
-  imageTab.addEventListener('click', () => select(true));
-  document.getElementById('viewTabs').addEventListener('keydown', (event) => {
-    if (![chatTab, imageTab].includes(event.target) || !['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
-    event.preventDefault();
-    const images = event.key === 'End' || (event.key !== 'Home' && event.target === chatTab);
-    select(images);
-    (images ? imageTab : chatTab).focus();
-  });
-  form.addEventListener('invalid', (event) => {
-    const advanced = event.target.closest('details');
-    if (advanced) advanced.open = true;
-  }, true);
-  form.addEventListener('submit', async (event) => {
-    event.preventDefault();
-    if (button.disabled) return;
-    const prompt = host.querySelector('#imagePrompt').value.trim();
-    if (!prompt) return;
-    pending = true;
-    error.textContent = '';
-    paint();
-    try {
-      const negativePrompt = host.querySelector('#imageNegative').value.trim();
-      const seed = host.querySelector('#imageSeed');
-      const cfg = host.querySelector('#imageCfg');
-      const sampler = host.querySelector('#imageSampler').value;
-      const sigmas = host.querySelector('#imageSigmas').value.trim();
-      const reply = await rpc('generate', {
-        prompt,
-        width: host.querySelector('#imageWidth').valueAsNumber,
-        height: host.querySelector('#imageHeight').valueAsNumber,
-        steps: host.querySelector('#imageSteps').valueAsNumber,
-        ...(negativePrompt && { negativePrompt }),
-        ...(seed.value !== '' && { seed: seed.valueAsNumber }),
-        ...(cfg.value !== '' && { cfg: cfg.valueAsNumber }),
-        ...(sampler && { sampler }),
-        ...(sigmas && { sigmas }),
-      }, 0);
-      if (!reply.ok || reply.result?.error) showError(error, reply);
-      else if (reply.result?.png) {
-        if (outputUrl) URL.revokeObjectURL(outputUrl);
-        outputUrl = URL.createObjectURL(new Blob([
-          Uint8Array.from(atob(reply.result.png), (char) => char.charCodeAt(0)),
-        ], { type: 'image/png' }));
-        preview.src = outputUrl;
-        figure.hidden = false;
-        empty.hidden = true;
-      }
-    } catch { showError(error); }
-    finally {
-      pending = false;
-      cancelling = false;
-      paint();
-      void refresh();
-    }
-  });
-  cancel.addEventListener('click', async () => {
-    cancelling = true;
-    paint();
-    const reply = await rpc('cancel');
-    if (!reply.ok) { cancelling = false; showError(error, reply); paint(); }
-  });
-  save.addEventListener('click', async () => {
-    save.disabled = true;
-    const reply = await rpc('export', dialogLabels('image.export'), 0);
-    save.disabled = false;
-    if (!reply.ok) showError(error, reply);
-  });
-  window.addEventListener('omni-locale-change', () => { preview.alt = t('image.preview'); paint(); });
-  setInterval(() => {
-    if (!host.hidden || pending || document.querySelector('.image-settings')) void refresh();
-  }, 500);
-}
-
-export function openImageSettings(onBack) {
-  const host = document.getElementById('modalHost');
-  const overlay = document.createElement('div');
-  overlay.className = 'modal-overlay';
-  overlay.innerHTML = `
-    <section class="modal image-settings" role="dialog" aria-modal="true" aria-labelledby="imageSettingsTitle">
-      <div class="modal-head">
-        <h3 id="imageSettingsTitle" data-i18n="image.settings"></h3>
-        <button class="btn" type="button" data-back data-dialog-focus data-i18n="backend.back"></button>
-      </div>
-      <div class="modal-body">
-        <p role="status"></p>
-        <p data-version></p>
-        <label for="imageDevice" data-i18n="image.device"></label>
-        <select id="imageDevice"><option value="cpu">CPU</option><option value="vulkan">Vulkan</option></select>
-        <label for="imageModelMode" data-i18n="image.modelType"></label>
-        <select id="imageModelMode">
-          <option value="checkpoint" data-i18n="image.checkpoint"></option>
-          <option value="components" data-i18n="image.components"></option>
-        </select>
-        <div class="image-actions" data-checkpoint>
-          <button class="btn" type="button" data-model data-weight="model" data-i18n="image.choose"></button>
-          <b data-path="model"></b>
-        </div>
-        <div data-components hidden>
-          ${['diffusion', 'encoder', 'vae'].map((part) => `
-            <div class="image-actions">
-              <button class="btn" type="button" data-weight="${part}" data-i18n="image.${part}"></button>
-              <b data-path="${part}"></b>
-            </div>`).join('')}
-        </div>
+        </form>
         <p role="alert"></p>
       </div>
       <div class="modal-foot">
-        <button class="btn" type="button" data-install data-i18n="image.install"></button>
-        <button class="btn" type="button" data-stop data-i18n="image.stop"></button>
+        <button class="btn" type="button" data-close data-i18n="settings.close"></button>
         <button class="btn primary" type="button" data-save data-i18n="settings.save"></button>
       </div>
     </section>`;
@@ -310,8 +251,25 @@ export function openImageSettings(onBack) {
   let dirty = false;
   let pending = false;
   const error = get('[role=alert]');
-  const close = () => { refreshDialog = () => {}; overlay.remove(); onBack?.(); };
+  const form = get('.image-generation-options');
+  const fields = [...form.querySelectorAll('[id]')].filter((field) => Object.hasOwn(imageDefaults, field.id));
+  let initialized = false;
+  let closed = false;
+  const timer = setInterval(() => {
+    if (!overlay.isConnected) clearInterval(timer);
+    else void refresh();
+  }, 500);
+  const close = () => {
+    if (pending) return;
+    closed = true;
+    clearInterval(timer);
+    refreshDialog = () => {};
+    overlay.remove();
+    onBack?.();
+  };
   get('[data-back]').onclick = close;
+  overlay.querySelectorAll('[data-close]').forEach((button) => { button.onclick = close; });
+  overlay.addEventListener('click', (event) => { if (event.target === overlay) close(); });
   overlay.addEventListener('keydown', (event) => { if (event.key === 'Escape') close(); });
   host.replaceChildren(overlay);
   function paint() {
@@ -325,9 +283,11 @@ export function openImageSettings(onBack) {
     get('[data-checkpoint]').hidden = multi;
     get('[data-components]').hidden = !multi;
     get('[role=status]').textContent = stateLabel();
-    get('[data-version]').textContent = `sd-server · ${snapshot.version || '—'}`;
+    get('[data-version]').textContent = snapshot.version ? `· sd-server · ${snapshot.version}` : '';
+    get('.image-state-dot').classList.toggle('is-ready', snapshot.phase === 'ready');
     const disabled = pending || !desktop() || !snapshot.device || snapshot.installing || snapshot.busy;
     device.disabled = mode.disabled = disabled;
+    for (const field of fields) field.disabled = disabled || !initialized;
     for (const button of weightButtons) {
       const part = button.dataset.weight;
       const path = get(`[data-path="${part}"]`);
@@ -335,7 +295,9 @@ export function openImageSettings(onBack) {
       path.title = paths[part] || '';
       button.disabled = disabled;
     }
-    get('[data-save]').disabled = disabled || !dirty;
+    get('[data-save]').disabled = disabled || !initialized || !dirty;
+    get('[data-install]').hidden = !!snapshot.installed;
+    get('[data-stop]').hidden = !snapshot.pid;
     get('[data-install]').disabled = disabled || dirty || snapshot.installed;
     get('[data-stop]').disabled = pending || !snapshot.pid;
   }
@@ -347,7 +309,15 @@ export function openImageSettings(onBack) {
     catch { showError(error); }
     finally { pending = false; paint(); void refresh(); }
   }
-  device.onchange = mode.onchange = () => { dirty = true; paint(); };
+  device.onchange = mode.onchange = form.oninput = () => { dirty = true; paint(); };
+  form.addEventListener('submit', (event) => {
+    event.preventDefault();
+    get('[data-save]').click();
+  });
+  form.addEventListener('invalid', (event) => {
+    const advanced = event.target.closest('details');
+    if (advanced) advanced.open = true;
+  }, true);
   for (const button of weightButtons) {
     button.onclick = () => run(async () => {
       const key = button.dataset.i18n;
@@ -356,22 +326,30 @@ export function openImageSettings(onBack) {
       else if (!reply.cancelled) { paths[button.dataset.weight] = reply.result.path; dirty = true; }
     });
   }
-  get('[data-save]').onclick = () => run(async () => {
-    const multi = mode.value === 'components';
-    const { model, diffusion, encoder, vae } = paths;
-    const settings = {
-      device: device.value,
-      model: model || null,
-      components: multi ? { diffusion: diffusion || null, encoder: encoder || null, vae: vae || null } : null,
-    };
-    const reply = await rpc('save', { settings });
-    if (!reply.ok) showError(error, reply);
-    else {
-      const configured = multi ? Object.values(settings.components).every(Boolean) : !!settings.model;
-      snapshot = { ...snapshot, ...settings, configured, installed: settings.device === snapshot.device && snapshot.installed, phase: 'stopped', pid: null };
-      dirty = false;
-    }
-  });
+  get('[data-save]').onclick = () => {
+    if (!form.reportValidity()) return;
+    return run(async () => {
+      const generation = imageGenerationPayload(Object.fromEntries(fields.map(({ id, value }) => [id, value])));
+      const multi = mode.value === 'components';
+      const { model, diffusion, encoder, vae } = paths;
+      const settings = {
+        device: device.value,
+        generation,
+        model: model || null,
+        components: multi ? { diffusion: diffusion || null, encoder: encoder || null, vae: vae || null } : null,
+      };
+      const reply = await rpc('save', { settings });
+      if (!reply.ok) showError(error, reply);
+      else {
+        const backendChanged = settings.device !== snapshot.device ||
+          !!settings.components !== !!snapshot.components || settings.model !== snapshot.model ||
+          ['diffusion', 'encoder', 'vae'].some((key) => settings.components?.[key] !== snapshot.components?.[key]);
+        const configured = multi ? Object.values(settings.components).every(Boolean) : !!settings.model;
+        snapshot = { ...snapshot, ...settings, configured, installed: settings.device === snapshot.device && snapshot.installed, ...(backendChanged && { phase: 'stopped', pid: null }) };
+        dirty = false;
+      }
+    });
+  };
   get('[data-install]').onclick = () => run(async () => {
     const reply = await rpc('install', {}, 0);
     if (!reply.ok) showError(error, reply);
@@ -382,5 +360,14 @@ export function openImageSettings(onBack) {
   });
   refreshDialog = paint;
   paint();
-  void refresh();
+  void (async () => {
+    await refresh();
+    if (closed || !overlay.isConnected) return;
+    const defaults = await savedGeneration(snapshot);
+    if (closed || !overlay.isConnected) return;
+    const values = imageFields(defaults);
+    for (const field of fields) field.value = values[field.id];
+    initialized = true;
+    paint();
+  })();
 }

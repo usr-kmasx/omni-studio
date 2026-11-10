@@ -1,6 +1,7 @@
 use std::{cell::Cell, rc::Rc, sync::{mpsc, Arc, atomic::{AtomicBool, Ordering}}, time::Duration};
 
 use gtk4::prelude::*;
+use webkit6::prelude::*;
 use std::{fs, io, path::PathBuf, time::{SystemTime, UNIX_EPOCH}};
 use omni_core::{downloads::DownloadError, huggingface, settings::Settings};
 use serde_json::{json, Value};
@@ -13,6 +14,65 @@ pub struct CatalogBridge {
     cancel: Arc<AtomicBool>,
     pause: Arc<AtomicBool>,
     skip_verification: Arc<AtomicBool>,
+}
+
+const HUB_MODELS: &str = "https://huggingface.co/models";
+
+fn safe_http_uri(url: &str) -> Option<glib::Uri> {
+    let uri = glib::Uri::parse(url, glib::UriFlags::ENCODED_PATH).ok()?;
+    if !matches!(uri.scheme().as_str(), "http" | "https") || uri.userinfo().is_some()
+        || uri.host()?.is_empty() {
+        return None;
+    }
+    Some(uri)
+}
+
+fn is_hub(uri: &glib::Uri) -> bool {
+    uri.scheme() == "https" && matches!(uri.port(), -1 | 443) &&
+        uri.host().is_some_and(|host| host.eq_ignore_ascii_case("huggingface.co"))
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct HubModelFile {
+    repo: String,
+    reference: String,
+    path: String,
+}
+
+fn hub_model_file(uri: &glib::Uri) -> Option<HubModelFile> {
+    if !is_hub(uri) { return None; }
+    let path = uri.path();
+    let mut parts = path.strip_prefix('/')?.split('/');
+    let decode_segment = |value: &str| {
+        let value = glib::Uri::unescape_string(value, Some("/\\")).map(|s| s.to_string())?;
+        (!value.is_empty() && !matches!(value.as_str(), "." | "..") &&
+            !value.chars().any(char::is_control)).then_some(value)
+    };
+    let owner = decode_segment(parts.next()?)?;
+    let name = decode_segment(parts.next()?)?;
+    // Non-model Hub namespaces have a different URL structure.
+    if matches!(owner.as_str(), "api" | "datasets" | "spaces") || parts.next()? != "resolve" { return None; }
+    let reference = glib::Uri::unescape_string(parts.next()?, Some("\\"))?.to_string();
+    if reference.is_empty() || reference.chars().any(char::is_control) ||
+        reference.split('/').any(|part| matches!(part, "" | "." | "..")) {
+        return None;
+    }
+    let path = parts.map(decode_segment).collect::<Option<Vec<_>>>()?.join("/");
+    if !huggingface::is_model_file(&path) { return None; }
+    Some(HubModelFile { repo: format!("{owner}/{name}"), reference, path })
+}
+
+fn open_external(url: &str) -> bool {
+    safe_http_uri(url).is_some() &&
+        gtk4::gio::AppInfo::launch_default_for_uri(url, None::<&gtk4::gio::AppLaunchContext>).is_ok()
+}
+
+fn browser_download_event(view: &webkit6::WebView, payload: &Value) {
+    let Ok(payload) = serde_json::to_string(payload) else { return; };
+    view.evaluate_javascript(
+        &format!("window.dispatchEvent(new CustomEvent('omni-hf-site-download', {{ detail: {payload} }}));"),
+        None, None, None::<&gtk4::gio::Cancellable>, |_| {},
+    );
 }
 
 const PAUSE_TTL: u64 = 3 * 24 * 60 * 60;
@@ -88,6 +148,158 @@ impl CatalogBridge {
         bridge
     }
 
+    fn open_site(&self, stack: &gtk4::Stack, app_view: &webkit6::WebView, labels: &Value) {
+        if stack.child_by_name("hugging-face").is_some() {
+            stack.set_visible_child_name("hugging-face");
+            return;
+        }
+        let label = |name: &str, fallback: &str| {
+            labels[name].as_str().filter(|s| !s.is_empty()).unwrap_or(fallback).to_owned()
+        };
+        let network = webkit6::NetworkSession::new_ephemeral();
+        network.connect_download_started(|_, download| download.cancel());
+        let settings = webkit6::Settings::new();
+        settings.set_javascript_can_open_windows_automatically(false);
+        settings.set_allow_file_access_from_file_urls(false);
+        settings.set_allow_universal_access_from_file_urls(false);
+        let web = webkit6::WebView::builder()
+            .web_context(&webkit6::WebContext::new())
+            .network_session(&network)
+            .user_content_manager(&webkit6::UserContentManager::new())
+            .settings(&settings)
+            .build();
+        web.set_vexpand(true);
+        web.connect_permission_request(|_, request| { request.deny(); true });
+        web.connect_run_file_chooser(|_, request| { request.cancel(); true });
+
+        let toolbar = gtk4::Box::new(gtk4::Orientation::Horizontal, 6);
+        toolbar.set_margin_top(8);
+        toolbar.set_margin_bottom(8);
+        toolbar.set_margin_start(12);
+        toolbar.set_margin_end(12);
+        let button = |glyph: &str, title: &str| {
+            let button = gtk4::Button::from_icon_name(glyph);
+            button.set_tooltip_text(Some(title));
+            button.update_property(&[gtk4::accessible::Property::Label(title)]);
+            toolbar.append(&button);
+            button
+        };
+        let close = button("window-close-symbolic", &label("close", "Back to settings"));
+        let back = button("go-previous-symbolic", &label("back", "Back"));
+        let forward = button("go-next-symbolic", &label("forward", "Forward"));
+        let reload = button("view-refresh-symbolic", &label("reload", "Reload"));
+        let title = gtk4::Label::new(Some("huggingface.co"));
+        title.set_hexpand(true);
+        title.set_xalign(0.0);
+        toolbar.append(&title);
+        let external = button("web-browser-symbolic", &label("external", "Open in browser"));
+        let downloads = button("folder-download-symbolic", &label("downloads", "Downloads in Omni Studio"));
+        let layout = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
+        layout.append(&toolbar);
+        layout.append(&web);
+        stack.add_named(&layout, Some("hugging-face"));
+
+        back.connect_clicked(glib::clone!(#[weak] web, move |_| web.go_back()));
+        forward.connect_clicked(glib::clone!(#[weak] web, move |_| web.go_forward()));
+        reload.connect_clicked(glib::clone!(#[weak] web, move |_| web.reload()));
+        external.connect_clicked(glib::clone!(#[weak] web, move |_| {
+            if let Some(url) = web.uri() { let _ = open_external(&url); }
+        }));
+        for button in [&close, &downloads] {
+            button.connect_clicked(glib::clone!(#[weak] stack, #[weak] app_view, move |_| {
+                stack.set_visible_child_name("omni");
+                app_view.grab_focus();
+            }));
+        }
+        back.set_sensitive(false);
+        forward.set_sensitive(false);
+        web.connect_load_changed(glib::clone!(#[weak] back, #[weak] forward, move |web, _| {
+            back.set_sensitive(web.can_go_back());
+            forward.set_sensitive(web.can_go_forward());
+        }));
+
+        let preparing = Rc::new(Cell::new(false));
+        let bridge = self.clone();
+        let app_view = app_view.clone();
+        let downloading_label = label("loading", "Loading…");
+        let error_label = label("error", "Could not open the selected file.");
+        let busy_label = label("busy", "A download is already in progress.");
+        web.connect_decide_policy(move |web, decision, kind| {
+            use webkit6::PolicyDecisionType::{NavigationAction, NewWindowAction, Response};
+            if kind == Response {
+                if let Some(response) = decision.downcast_ref::<webkit6::ResponsePolicyDecision>() {
+                    if !response.is_mime_type_supported() {
+                        decision.ignore();
+                        return true;
+                    }
+                }
+                return false;
+            }
+            if !matches!(kind, NavigationAction | NewWindowAction) { return false; }
+            let Some(action) = decision.downcast_ref::<webkit6::NavigationPolicyDecision>()
+                .and_then(|d| d.navigation_action()) else { decision.ignore(); return true; };
+            let Some(url) = action.request().and_then(|r| r.uri()) else { decision.ignore(); return true; };
+            let Some(uri) = safe_http_uri(&url) else { decision.ignore(); return true; };
+            if is_hub(&uri) {
+                if let Some(file) = hub_model_file(&uri) {
+                    decision.ignore();
+                    if !action.is_user_gesture() { return true; }
+                    if bridge.downloading.get() || preparing.get() || paused_job().is_some() {
+                        title.set_text(&busy_label);
+                        return true;
+                    }
+                    preparing.set(true);
+                    title.set_text(&downloading_label);
+                    let (tx, rx) = mpsc::channel();
+                    let repo = file.repo.clone();
+                    std::thread::spawn(move || {
+                        let selected = huggingface::selected_model_variant(&repo, &file.reference, &file.path);
+                        let _ = tx.send((repo, selected));
+                    });
+                    let preparing = preparing.clone();
+                    let title = title.clone();
+                    let error_label = error_label.clone();
+                    let app_view = app_view.clone();
+                    dispatch_on_main(rx, move |(repo, selected)| {
+                        preparing.set(false);
+                        title.set_text("huggingface.co");
+                        match selected {
+                            Ok((revision, variant)) => browser_download_event(&app_view, &json!({
+                                "repo": repo, "revision": revision, "variant": variant,
+                            })),
+                            Err(huggingface::HfError::Http(401 | 403 | 404)) => {
+                                if !open_external(&url) { title.set_text(&error_label); }
+                            }
+                            Err(_) => title.set_text(&error_label),
+                        }
+                    });
+                    return true;
+                }
+                // Unsupported files and content downloads never go to the browser download manager.
+                if uri.path().contains("/resolve/") || uri.path().contains("/raw/") {
+                    decision.ignore();
+                    return true;
+                }
+                if kind == NewWindowAction {
+                    decision.ignore();
+                    if action.is_user_gesture() { web.load_uri(&url); }
+                    return true;
+                }
+                title.set_text("huggingface.co");
+                return false;
+            }
+            decision.ignore();
+            if action.is_user_gesture() &&
+                action.navigation_type() == webkit6::NavigationType::LinkClicked {
+                let _ = open_external(&url);
+            }
+            true
+        });
+        web.load_uri(HUB_MODELS);
+        stack.set_visible_child_name("hugging-face");
+        web.grab_focus();
+    }
+
     pub fn handle(
         &self,
         cmd: &str,
@@ -96,6 +308,15 @@ impl CatalogBridge {
         parent: Option<gtk4::Window>,
     ) {
         let Some(id) = request["requestId"].as_str().map(str::to_owned) else { return; };
+        if cmd == "hf-open-site" {
+            if let Some(stack) = view.parent().and_downcast::<gtk4::Stack>() {
+                self.open_site(&stack, view, &request["labels"]);
+                publish_command_result(view, &json!({"requestId":id,"ok":true}));
+            } else {
+                publish_command_result(view, &json!({"requestId":id,"ok":false,"code":"native"}));
+            }
+            return;
+        }
         if matches!(cmd, "hf-download-status" | "hf-skip-verification" | "hf-pause-download" | "hf-resume-download" | "hf-cancel-download") {
             let active = self.downloading.get();
             let result = match cmd {
@@ -135,46 +356,9 @@ impl CatalogBridge {
             publish_command_result(view, &result);
             return;
         }
+        if cmd != "hf-download" { return; }
         let repo = request["repo"].as_str().unwrap_or_default().to_owned();
-        if cmd == "hf-open-link" {
-            let opened = request["url"].as_str().and_then(|url| {
-                let uri = glib::Uri::parse(url, glib::UriFlags::NONE).ok()?;
-                if !matches!(uri.scheme().as_str(), "http" | "https") || uri.host()?.is_empty() {
-                    return None;
-                }
-                gtk4::gio::AppInfo::launch_default_for_uri(url, None::<&gtk4::gio::AppLaunchContext>).ok()
-            }).is_some();
-            publish_command_result(view, &json!({ "requestId": id, "ok": opened }));
-            return;
-        }
         let revision = request["revision"].as_str().unwrap_or_default().to_owned();
-        if cmd != "hf-download" {
-            let view = view.clone();
-            let cmd = cmd.to_owned();
-            let query: String = request["query"].as_str().unwrap_or_default().chars().take(160).collect();
-            let format = request["format"].as_str().unwrap_or_default().to_owned();
-            let sort = request["sort"].as_str().unwrap_or_default().to_owned();
-            let (tx, rx) = mpsc::channel();
-            dispatch_on_main(rx, move |payload| publish_command_result(&view, &payload));
-            std::thread::spawn(move || {
-                let result = match cmd.as_str() {
-                    "hf-trending" | "hf-search" => huggingface::model_catalog(&query, &format, &sort).map(|models| json!(models)),
-                    "hf-readme" => Ok(json!(huggingface::catalog_readme(&repo, &revision))),
-                    _ => huggingface::catalog_variants(&repo).map(|(revision, variants, gated)| {
-                        json!({ "revision": revision, "variants": variants, "gated": gated })
-                    }),
-                };
-                let payload = match result {
-                    Ok(data) => json!({ "requestId": id, "ok": true, "result": data }),
-                    Err(error) => {
-                        log::warn!("Hugging Face catalog: {error}");
-                        json!({ "requestId": id, "ok": false, "code": "network" })
-                    }
-                };
-                let _ = tx.send(payload);
-            });
-            return;
-        }
 
         if !self.downloading.get() && (paused_job().is_some() || load_paused().is_some()) {
             publish_command_result(view, &json!({ "requestId": id, "ok": false, "code": "paused" }));
@@ -233,6 +417,14 @@ impl CatalogBridge {
                 return;
             }
 
+            let folder = match huggingface::model_download_folder(&folder, &repo) {
+                Ok(path) => path,
+                Err(_) => {
+                    downloading.set(false);
+                    publish_command_result(&view, &json!({ "requestId": id, "ok": false, "code": "folder" }));
+                    return;
+                }
+            };
             let staging = match huggingface::new_download_staging(&folder) {
                 Ok(path) => path,
                 Err(_) => {

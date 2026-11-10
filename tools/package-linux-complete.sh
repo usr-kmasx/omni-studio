@@ -30,7 +30,7 @@ trap 'rm -rf -- "$staging"' EXIT
 package="$staging/omni-studio-linux-x86_64"
 resources="$package/resources/omni-complete"
 mkdir -p "$package/app" "$resources" "$package/licenses"
-cp -a -- "$repo/index.html" "$repo/css" "$repo/js" "$repo/vendor" "$package/app/"
+cp -a -- "$repo/index.html" "$repo/assets" "$repo/css" "$repo/js" "$repo/vendor" "$package/app/"
 install -m 755 -- "$binary" "$package/omni-app"
 cp --reflink=auto -- "$inputs/$model" "$inputs/$projector" "$inputs/$runtime" "$resources/"
 cp -- "$repo/LICENSE" "$package/licenses/Omni-Studio-MIT.txt"

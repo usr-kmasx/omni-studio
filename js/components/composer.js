@@ -13,17 +13,19 @@ import {
 } from './media.js';
 import { Recorder } from './audio.js';
 import { t } from '../i18n.js';
+import { imageChatLabel } from './image-chat-labels.js';
 
 export function createComposer(hostEl, handlers = {}) {
   const { onSubmit, onStop, onRecordingChange, onLive } = handlers;
 
   const root = el(`
     <div class="composer">
-      <textarea rows="1" data-i18n-placeholder="composer.placeholder" placeholder="Ask anything…"></textarea>
+      <textarea rows="1" data-i18n-placeholder="composer.placeholder" placeholder="Type your message…"></textarea>
       <div class="att-row"></div>
       <div class="composer-actions">
         <div class="attach-group">
           <button class="icon-btn" data-attach type="button" data-i18n-title="composer.attachFiles" data-i18n-aria="composer.attachFiles" title="${t('composer.attachFiles')}" aria-label="${t('composer.attachFiles')}">${icon('plus')}</button>
+          <button class="icon-btn image-mode-btn" type="button" aria-pressed="false">${icon('image', 18)}</button>
           <input type="file" hidden multiple accept="image/*,audio/*,video/*,.txt,.md,.markdown,.pdf,.docx">
         </div>
         <div class="composer-metrics" hidden></div>
@@ -39,6 +41,8 @@ export function createComposer(hostEl, handlers = {}) {
 
   const attRow = root.querySelector('.att-row');
   const textarea = root.querySelector('textarea');
+  const attachBtn = root.querySelector('[data-attach]');
+  const imageModeBtn = root.querySelector('.image-mode-btn');
   const fileInput = root.querySelector('input[type=file]');
   const sendBtn = root.querySelector('.send-btn');
   const metrics = root.querySelector('.composer-metrics');
@@ -70,16 +74,25 @@ export function createComposer(hostEl, handlers = {}) {
   let recording = false;
   let micPending = false;
   let live = false;
+  let imageMode = false;
   let recorder = null;
 
   function updateActionButtons() {
-    const hasPendingContent = media.length > 0 || textarea.value.trim().length > 0;
+    const hasPendingContent = (!imageMode && media.length > 0) || textarea.value.trim().length > 0;
+    root.classList.toggle('composer-image-mode', imageMode);
+    textarea.dataset.i18nPlaceholder = imageMode ? 'image.prompt' : 'composer.placeholder';
+    textarea.placeholder = t(textarea.dataset.i18nPlaceholder);
+    imageModeBtn.setAttribute('aria-pressed', String(imageMode));
+    imageModeBtn.title = imageChatLabel('mode');
+    imageModeBtn.setAttribute('aria-label', imageModeBtn.title);
+    imageModeBtn.disabled = busy || live || recording || micPending;
+    attachBtn.disabled = imageMode;
     const showSend = busy || hasPendingContent;
     sendBtn.hidden = !showSend;
     sendBtn.disabled = !busy && (recording || micPending);
     micBtn.hidden = busy && !recording;
-    micBtn.disabled = live || micPending;
-    liveBtn.disabled = busy || micPending;
+    micBtn.disabled = imageMode || live || micPending;
+    liveBtn.disabled = imageMode || busy || micPending;
     const label = recording ? 'composer.cancelRecording' : live ? 'voice.liveEnd' : 'voice.liveStart';
     liveBtn.classList.toggle('cancel-recording', recording);
     liveBtn.innerHTML = icon(recording ? 'stop' : 'waveform', 19);
@@ -102,8 +115,20 @@ export function createComposer(hostEl, handlers = {}) {
   });
   updateActionButtons();
 
+  window.addEventListener('omni-locale-change', updateActionButtons);
+  function setImageMode(enabled) {
+    imageMode = enabled;
+    updateActionButtons();
+    autosize();
+  }
+  imageModeBtn.addEventListener('click', () => {
+    if (imageModeBtn.disabled) return;
+    setImageMode(!imageMode);
+    textarea.focus({ preventScroll: true });
+  });
+
   // ---- seleção de arquivos ----
-  root.querySelector('[data-attach]').addEventListener('click', () => fileInput.click());
+  attachBtn.addEventListener('click', () => { if (!imageMode) fileInput.click(); });
   fileInput.addEventListener('change', async () => {
     const files = [...fileInput.files];
     fileInput.value = '';
@@ -111,6 +136,7 @@ export function createComposer(hostEl, handlers = {}) {
   });
 
   async function addFile(file) {
+    if (imageMode) return;
     const att = await makeDraftAttachment(file);
     if (!att) {
       appToast(t('composer.unsupported', { name: file.name }), 'warn');
@@ -156,6 +182,7 @@ export function createComposer(hostEl, handlers = {}) {
   let dragDepth = 0;
   root.addEventListener('dragenter', (e) => {
     e.preventDefault();
+    if (imageMode) return;
     dragDepth++;
     root.style.borderColor = 'var(--accent)';
   });
@@ -239,7 +266,7 @@ export function createComposer(hostEl, handlers = {}) {
 
   // ---- microfone (grava anexo) ----
   async function toggleMic() {
-    if (live || busy || micPending) return;
+    if (imageMode || live || busy || micPending) return;
     micPending = true;
     updateActionButtons();
     try {
@@ -334,13 +361,13 @@ export function createComposer(hostEl, handlers = {}) {
 
   function submit() {
     const text = textarea.value.trim();
-    const draft = media.splice(0, media.length);
+    const draft = imageMode ? [] : media.splice(0, media.length);
     renderChips();
     if (!text && !draft.length) return;
     textarea.value = '';
     autosize();
     updateActionButtons();
-    onSubmit?.({ text, media: draft });
+    onSubmit?.({ text, media: draft, imageMode });
   }
 
   return {
@@ -356,6 +383,7 @@ export function createComposer(hostEl, handlers = {}) {
       paintMetrics();
     },
     setBusy,
+    setImageMode,
     setLive: (active) => { live = active; updateActionButtons(); },
     get recording() { return recording || micPending; },
     restoreDraft: (draft) => {

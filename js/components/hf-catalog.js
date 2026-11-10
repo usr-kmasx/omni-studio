@@ -57,8 +57,10 @@ function showTransfer(transfer, key, vars = {}) {
     placePanel();
     const toggle = transferPanel.querySelector('.hf-transfer-toggle');
     const body = transferPanel.querySelector('.hf-transfer-body');
-    const logo = document.querySelector('#topbar .logo svg');
-    if (logo) toggle.append(logo.cloneNode(true));
+    const logo = document.createElement('img');
+    logo.src = new URL('../../assets/studio.omni.app.svg', import.meta.url).href;
+    logo.alt = '';
+    toggle.append(logo);
     toggle.setAttribute('aria-controls', body.id);
     const setCollapsed = (collapsed) => {
       body.hidden = collapsed;
@@ -130,8 +132,7 @@ function showTransfer(transfer, key, vars = {}) {
           pausedTransfer = null;
           clearTimeout(pauseExpiryTimer);
           showTransfer(job, 'hf.discardedPause');
-          notifyTransferChange();
-        } else showTransfer(job, 'hf.cancelDownloadError');
+          } else showTransfer(job, 'hf.cancelDownloadError');
         return;
       }
       const job = activeTransfer;
@@ -218,9 +219,6 @@ function showTransfer(transfer, key, vars = {}) {
   button.textContent = t(button.dataset.i18n);
 }
 
-function notifyTransferChange() {
-  document.querySelector('.hf-page')?.dispatchEvent(new Event('hf-transfer-ended'));
-}
 
 function showPaused(transfer, key = 'hf.downloadPaused') {
   pausedTransfer = transfer;
@@ -241,7 +239,6 @@ export async function restoreHfDownload() {
     pausedTransfer = null;
     showTransfer(expired, 'hf.pauseExpired');
   }
-  notifyTransferChange();
 }
 
 function updateTransfer(transfer, { bytes, total, speed, index, count, verifying }) {
@@ -256,7 +253,6 @@ function finishTransfer(transfer, response) {
   if (response.paused) {
     showPaused(response.paused);
     if (transfer.stopping) transferPanel.querySelector('[data-stop]').click();
-    notifyTransferChange();
     return {};
   }
   let key;
@@ -271,429 +267,76 @@ function finishTransfer(transfer, response) {
     else key = items.every((item) => item.code === 'done') ? 'hf.done' : 'hf.batchFinished';
   }
   if (key) showTransfer(transfer, key, folder ? { folder } : {});
-  notifyTransferChange();
   return { key, folder };
 }
 
-function safeUrl(value, base) {
-  try {
-    const url = new URL(value, base);
-    if (['http:', 'https:'].includes(url.protocol) && !url.username && !url.password) return url.href;
-  } catch { /* link inválido */ }
-  return null;
+
+const browserLabels = {
+  en: ['Back', 'Forward', 'Reload', 'Open in browser', 'Downloads in Omni Studio'],
+  pt: ['Voltar', 'Avançar', 'Recarregar', 'Abrir no navegador', 'Downloads no Omni Studio'],
+  es: ['Atrás', 'Adelante', 'Recargar', 'Abrir en el navegador', 'Descargas en Omni Studio'],
+  fr: ['Précédent', 'Suivant', 'Actualiser', 'Ouvrir dans le navigateur', 'Téléchargements dans Omni Studio'],
+  de: ['Zurück', 'Vorwärts', 'Neu laden', 'Im Browser öffnen', 'Downloads in Omni Studio'],
+};
+
+async function downloadSiteSelection(selection) {
+  if (!selection || activeTransfer || pausedTransfer) return;
+  const { repo, revision, variant } = selection;
+  if ([repo, revision, variant].some(value => typeof value !== 'string' || !value)) return;
+  const transfer = { model: repo, stopping: false };
+  activeTransfer = transfer;
+  const response = await request('hf-download', {
+    repo, revision, variants: [variant],
+    folderTitle: t('hf.chooseFolder'),
+    acceptLabel: t('hf.download'),
+    cancelLabel: t('settings.cancel'),
+  }, sample => updateTransfer(transfer, sample));
+  finishTransfer(transfer, response);
 }
 
-function readmeImageUrl(value, base) {
-  const safe = safeUrl(value, base);
-  if (!safe) return null;
-  const url = new URL(safe);
-  // A repository file viewer returns HTML. Images need the file response.
-  if (url.hostname === 'huggingface.co') {
-    url.pathname = url.pathname.replace(
-      /^((?:\/(?:datasets|spaces))?\/[^/]+\/[^/]+)\/(?:blob|raw)\//, '$1/resolve/',
-    );
-  } else if (url.hostname === 'github.com' && /^\/[^/]+\/[^/]+\/blob\//.test(url.pathname)) {
-    url.searchParams.set('raw', 'true');
-  }
-  return url.href;
-}
+window.addEventListener('omni-hf-site-download', ({ detail }) => {
+  void downloadSiteSelection(detail);
+});
 
-const readmeTags = new Set((
-  'a abbr b blockquote br caption code dd del details div dl dt em figcaption figure h1 h2 h3 h4 h5 h6 ' +
-  'hr i img kbd li mark ol p pre s small span strong sub summary sup table tbody td th thead tfoot tr ul'
-).split(' '));
-const discardedReadmeTags = new Set(['script', 'style', 'iframe', 'object', 'embed', 'template']);
+export async function openHfCatalog({ onBack }) {
+  const [back, forward, reload, external, downloads] = browserLabels[getLocale()] ?? browserLabels.en;
+  const response = await request('hf-open-site', {
+    labels: { back, forward, reload, external, downloads, close: t('hf.back'),
+      loading: t('hf.loading'), error: t('hf.variantMissing'), busy: t('hf.busy') },
+  });
+  if (response.ok) return;
 
-function copyReadmeNode(node, target, linkBase, assetBase) {
-  if (node.nodeType === Node.TEXT_NODE) {
-    target.append(document.createTextNode(node.data));
-    return;
-  }
-  if (node.nodeType !== Node.ELEMENT_NODE || node.namespaceURI !== 'http://www.w3.org/1999/xhtml') return;
-  const tag = node.localName;
-  if (discardedReadmeTags.has(tag)) return;
-
-  const element = readmeTags.has(tag) ? document.createElement(tag) : null;
-  if (element) {
-    if (tag === 'a') {
-      const raw = node.getAttribute('href');
-      if (raw) {
-        // Alguns READMEs usam a sintaxe Markdown dentro do atributo HTML.
-        const markdownLink = /^\[[^\]]*\]\((https?:\/\/[^\s]+)\)$/.exec(raw.trim());
-        const href = safeUrl(markdownLink?.[1] || raw, linkBase);
-        if (href) element.href = href;
-      }
-    }
-    if (tag === 'img') {
-      const raw = node.getAttribute('src');
-      const src = raw && readmeImageUrl(raw, assetBase);
-      if (!src) return;
-      element.loading = 'lazy';
-      element.referrerPolicy = 'no-referrer';
-      element.alt = node.getAttribute('alt') || '';
-      element.src = src;
-    }
-    if (['img', 'td', 'th', 'table'].includes(tag)) {
-      const width = node.getAttribute('width') || '';
-      if (/^\d{1,4}%?$/.test(width)) element.style.width = width.endsWith('%') ? width : width + 'px';
-    }
-    const align = node.getAttribute('align');
-    if (['div', 'p', 'td', 'th'].includes(tag) && ['left', 'center', 'right'].includes(align)) {
-      element.style.textAlign = align;
-    }
-    for (const attr of ['colspan', 'rowspan']) {
-      const value = node.getAttribute(attr) || '';
-      if (['td', 'th'].includes(tag) && /^\d{1,2}$/.test(value)) element.setAttribute(attr, value);
-    }
-    if (tag === 'details') element.open = node.hasAttribute('open');
-    if (tag === 'ol' && /^-?\d{1,8}$/.test(node.getAttribute('start') || '')) {
-      element.setAttribute('start', node.getAttribute('start'));
-    }
-    if (node.hasAttribute('title')) element.title = node.getAttribute('title');
-    target.append(element);
-  }
-  for (const child of node.childNodes) copyReadmeNode(child, element || target, linkBase, assetBase);
-}
-
-async function renderReadme(markdown, repoUrl, revision) {
-  const module = await import('../../vendor/markdown-it/markdown-it.min.js');
-  const parser = (module.default || globalThis.markdownit)({ html: true, linkify: true });
-  // O template é inerte. Apenas nós e atributos reconstruídos entram na página.
-  const template = document.createElement('template');
-  template.innerHTML = parser.render(markdown);
-  const content = document.createDocumentFragment();
-  const linkBase = repoUrl + '/blob/' + revision + '/README.md';
-  const assetBase = repoUrl + '/resolve/' + revision + '/README.md';
-  for (const node of template.content.childNodes) copyReadmeNode(node, content, linkBase, assetBase);
-  return content;
-}
-
-function weightVariant(variant) {
-  const filename = variant.name.split('/').at(-1);
-  const extension = filename.split('.').at(-1).toLowerCase();
-  if (variant.projector) return { group: 'projector', name: filename };
-  const stem = filename.slice(0, -extension.length - 1);
-  const quant = stem.match(/(?:^|[-.])((?:UD-)?(?:IQ|TQ|Q)([1-9])(?:_[A-Z0-9]+)*|((?:BF|FP|F|INT|NVFP|MXFP)(4|8|16|32))(?:_[A-Z0-9]+)*)(?=$|[-.])/i);
-  return quant ? { group: Number(quant[2] || quant[4]), name: quant[1] }
-    : { group: extension, name: filename };
-}
-
-export function openHfCatalog({ onBack }) {
   const host = document.getElementById('modalHost');
-  const page = document.createElement('div');
-  page.className = 'hf-page modal';
-  page.setAttribute('role', 'dialog');
-  page.setAttribute('aria-modal', 'true');
-  page.setAttribute('aria-labelledby', 'hfTitle');
-  page.innerHTML = `
-    <header class="hf-header">
-      <button class="btn ghost" type="button" data-back data-i18n="hf.back"></button>
-      <h2 id="hfTitle" data-i18n="hf.title"></h2>
-    </header>
-    <section class="hf-content">
-      <div class="hf-toolbar">
-        <p data-intro data-i18n="hf.intro"></p>
-        <label class="hf-search">${icon('search', 16)}
-          <input type="search" maxlength="160" data-i18n-aria="hf.search" data-i18n-placeholder="hf.search">
-        </label>
-        <div class="hf-filters">
-          <select class="hf-format" data-i18n-aria="hf.format">
-            <option value="gguf">GGUF</option>
-            <option value="safetensors">Safetensors</option>
-            <option value="pytorch">PyTorch</option>
-          </select>
-          <select class="hf-sort" data-i18n-aria="hf.sort">
-            <option value="trendingScore" data-i18n="hf.sortTrending"></option>
-            <option value="downloads" data-i18n="hf.sortDownloads"></option>
-            <option value="likes" data-i18n="hf.sortLikes"></option>
-            <option value="createdAt" data-i18n="hf.sortCreated"></option>
-            <option value="lastModified" data-i18n="hf.sortUpdated"></option>
-            <option value="id" data-i18n="hf.sortName"></option>
-          </select>
-        </div>
-        <h3 data-i18n="hf.trending"></h3>
-      </div>
-      <div class="hf-scroll">
-        <p class="hf-status" role="status"></p>
-        <ul class="hf-list"></ul>
-        <div class="hf-download-controls" hidden>
-          <span data-selected></span>
-          <button class="btn" type="button" data-download>${icon('download', 16)} <span data-i18n="hf.downloadSelected"></span></button>
-        </div>
-        <ul class="hf-results" aria-live="polite"></ul>
-        <a class="btn hf-repo" hidden data-i18n="hf.repository"></a>
-        <section class="hf-readme" hidden>
-          <h4 data-i18n="hf.description"></h4>
-          <div class="md"></div>
-        </section>
-      </div>
-    </section>`;
-  const back = page.querySelector('[data-back]');
-  const intro = page.querySelector('[data-intro]');
-  const search = page.querySelector('input');
-  const format = page.querySelector('.hf-format');
-  const sort = page.querySelector('.hf-sort');
-  const filters = page.querySelector('.hf-filters');
-  const heading = page.querySelector('h3');
-  const status = page.querySelector('.hf-status');
-  const scroll = page.querySelector('.hf-scroll');
-  const list = page.querySelector('.hf-list');
-  const controls = page.querySelector('.hf-download-controls');
-  const downloadButton = page.querySelector('[data-download]');
-  const countLabel = page.querySelector('[data-selected]');
-  const readme = page.querySelector('.hf-readme');
-  const repoLink = page.querySelector('.hf-repo');
-  const results = page.querySelector('.hf-results');
-  let models = [];
-  let detail = null;
-  let downloading = false;
-  let searchTimer;
-  let searchVersion = 0;
-  let catalogPosition = 0;
-  let catalogFocus = '';
-
-  function label(element, key, vars = {}) {
-    element.dataset.i18n = key;
-    for (const name of Object.keys(element.dataset)) {
-      if (name.startsWith('i18nVar')) delete element.dataset[name];
-    }
-    for (const [name, value] of Object.entries(vars)) {
-      element.dataset['i18nVar' + name[0].toUpperCase() + name.slice(1)] = value;
-    }
-    const value = t(key, vars);
-    if (element.textContent !== value) element.textContent = value;
-  }
-  function showStatus(key, vars) {
-    if (key) label(status, key, vars);
-    else {
-      delete status.dataset.i18n;
-      status.textContent = '';
-    }
-  }
-
-  function showModels(restoreFocus = false) {
-    label(heading, search.value.trim() ? 'hf.searchResults'
-      : sort.value === 'trendingScore' ? 'hf.trending' : sort.selectedOptions[0].dataset.i18n);
-    list.replaceChildren();
-    let previousButton;
-    for (const model of models) {
-      const author = document.createElement('small');
-      author.textContent = model.author;
-      const button = document.createElement('button');
-      button.className = 'hf-model-open';
-      button.type = 'button';
-      const title = document.createElement('strong');
-      title.textContent = model.name;
-      button.append(title, author);
-      button.addEventListener('click', () => showDetail(model));
-      const item = document.createElement('li');
-      item.className = 'hf-model-row';
-      item.append(button);
-      list.append(item);
-      if (model.id === catalogFocus) previousButton = button;
-    }
-    if (restoreFocus) {
-      (previousButton || search).focus({ preventScroll: true });
-      scroll.scrollTop = catalogPosition;
-    }
-  }
-
-  function searchCatalog() {
-    const version = ++searchVersion;
-    const query = search.value.trim();
-    clearTimeout(searchTimer);
-    models = [];
-    showModels();
-    scroll.scrollTop = 0;
-    showStatus('hf.loading');
-    searchTimer = setTimeout(async () => {
-      const response = await request(query ? 'hf-search' : 'hf-trending', { query, format: format.value, sort: sort.value });
-      if (!page.isConnected || detail || version !== searchVersion) return;
-      models = response.ok ? response.result : [];
-      showModels();
-      showStatus(!response.ok ? errorKey[response.code] || 'hf.network'
-        : models.length ? null : query ? 'hf.emptySearch' : 'hf.empty');
-    }, query ? 280 : 0);
-  }
-
-  function updateSelection() {
-    const selected = detail.variants.filter((variant) => detail.selected.has(variant.name));
-    const known = selected.length > 0 && selected.every((variant) => variant.size != null);
-    const vars = { count: selected.length, size: known ? formatBytes(selected.reduce((sum, variant) => sum + variant.size, 0)) : '' };
-    countLabel.hidden = !!detail.gated;
-    downloadButton.hidden = !!detail.gated;
-    label(countLabel, known ? 'hf.selectedSize' : 'hf.selectedCount', vars);
-    downloadButton.disabled = !!activeTransfer || !!pausedTransfer || downloading || !selected.length;
-  }
-
-  function renderVariants() {
-    list.replaceChildren();
-    controls.hidden = !detail.variants.length;
-    const groups = new Map();
-    for (const variant of detail.variants) {
-      const meta = document.createElement('small');
-      if (variant.projector) {
-        const badge = document.createElement('span');
-        label(badge, 'hf.projector');
-        meta.append(badge, ' · ');
-      }
-      if (variant.files.length > 1) {
-        const parts = document.createElement('span');
-        label(parts, 'hf.parts', { count: variant.files.length });
-        meta.append(parts, ' · ');
-      }
-      const size = document.createElement('span');
-      if (variant.size != null) size.textContent = formatBytes(variant.size);
-      else label(size, 'hf.unknownSize');
-      meta.append(size);
-      const checkbox = document.createElement('input');
-      checkbox.type = 'checkbox';
-      checkbox.setAttribute('aria-label', variant.name);
-      checkbox.checked = detail.selected.has(variant.name);
-      checkbox.disabled = downloading || detail.gated;
-      checkbox.addEventListener('change', () => {
-        if (checkbox.checked) detail.selected.add(variant.name);
-        else detail.selected.delete(variant.name);
-        updateSelection();
-      });
-      const { group, name } = weightVariant(variant);
-      if (!groups.has(group)) groups.set(group, []);
-      const chip = document.createElement('label');
-      chip.className = 'hf-quant-chip';
-      chip.title = variant.name;
-      chip.append(checkbox);
-      if (/(?:^|[-_/])MTP(?:[-_/.]|$)/i.test(variant.name)) {
-        const mtp = document.createElement('span');
-        mtp.className = 'hf-quant-mtp';
-        mtp.textContent = 'MTP';
-        chip.append(mtp);
-      }
-      chip.append(name, meta);
-      groups.get(group).push(chip);
-    }
-    const order = (key) => typeof key === 'number' ? key : 100;
-    for (const [group, chips] of [...groups].sort(([a], [b]) => order(a) - order(b))) {
-      const line = document.createElement('li');
-      line.className = 'hf-quant-row';
-      const title = document.createElement('span');
-      if (typeof group === 'number') label(title, 'hf.bits', { count: group });
-      else if (group === 'projector') label(title, 'hf.projector');
-      else title.textContent = group.toUpperCase();
-      const options = document.createElement('div');
-      options.append(...chips);
-      line.append(title, options);
-      list.append(line);
-    }
-    updateSelection();
-  }
-
-  async function showDetail(model) {
-    catalogPosition = scroll.scrollTop;
-    catalogFocus = model.id;
-    const current = { model, variants: [], selected: new Set() };
-    detail = current;
-    intro.hidden = true;
-    filters.hidden = search.closest('label').hidden = true;
-    delete heading.dataset.i18n;
-    heading.textContent = model.id;
-    label(back, 'hf.backCatalog');
-    list.replaceChildren();
-    results.replaceChildren();
-    back.focus();
-    scroll.scrollTop = 0;
-    showStatus('hf.loading');
-    const repoUrl = 'https://huggingface.co/' + model.id.split('/').map(encodeURIComponent).join('/');
-    repoLink.href = repoUrl;
-    repoLink.hidden = false;
-
-    const response = await request('hf-variants', { repo: model.id });
-    if (!page.isConnected || detail !== current) return;
-    if (!response.ok) { showStatus(errorKey[response.code] || 'hf.network'); return; }
-    current.variants = response.result.variants;
-    current.revision = response.result.revision;
-    current.gated = response.result.gated;
-    showStatus(current.gated ? 'hf.gated' : current.variants.length ? null : 'hf.emptyVariants');
-    renderVariants();
-
-    const description = await request('hf-readme', { repo: model.id, revision: current.revision });
-    if (!description.ok || !description.result || !page.isConnected || detail !== current) return;
-    try {
-      const content = await renderReadme(description.result, repoUrl, current.revision);
-      if (!page.isConnected || detail !== current) return;
-      readme.querySelector('.md').replaceChildren(content);
-      readme.hidden = false;
-    } catch (error) { console.warn('Hugging Face README:', error); }
-  }
-
-  function setDownloading(value) {
-    downloading = value;
-    list.querySelectorAll('input').forEach((input) => { input.disabled = value; });
-    updateSelection();
-  }
-
-  async function downloadSelected() {
-    if (activeTransfer || pausedTransfer || downloading || detail?.gated || !detail?.selected.size) return;
-    const current = detail;
-    const transfer = { model: current.model.id, stopping: false };
-    activeTransfer = transfer;
-    setDownloading(true);
-    results.replaceChildren();
-    showStatus('hf.chooseFolder');
-    const response = await request('hf-download', {
-      repo: current.model.id,
-      revision: current.revision,
-      variants: [...current.selected],
-      folderTitle: t('hf.chooseFolder'),
-      acceptLabel: t('hf.download'),
-      cancelLabel: t('settings.cancel'),
-    }, (sample) => {
-      updateTransfer(transfer, sample);
-      if (page.isConnected && detail === current) showStatus(null);
-    });
-    downloading = false;
-    const { key, folder } = finishTransfer(transfer, response);
-    if (!page.isConnected || detail !== current) return;
-    setDownloading(false);
-    showStatus(key, folder ? { folder } : {});
-    if (response.ok && !response.cancelled && !response.paused) {
-      const { items } = response.result;
-      for (const item of items) {
-        const line = document.createElement('li');
-        const result = document.createElement('span');
-        label(result, item.code === 'done' ? 'hf.itemDone' : errorKey[item.code] || 'hf.downloadError');
-        line.append(item.name + ' — ', result);
-        results.append(line);
-      }
-    }
-  }
-
-  page.addEventListener('hf-transfer-ended', () => { if (detail) updateSelection(); });
-  search.addEventListener('input', searchCatalog);
-  format.addEventListener('change', searchCatalog);
-  sort.addEventListener('change', searchCatalog);
-  downloadButton.addEventListener('click', downloadSelected);
-  page.addEventListener('click', async (event) => {
-    const link = event.target.closest('a[href]');
-    if (!link) return;
-    event.preventDefault();
-    const url = safeUrl(link.href);
-    if (url && !(await request('hf-open-link', { url })).ok) showStatus('hf.linkError');
+  const dialog = document.createElement('section');
+  dialog.className = 'modal hf-page';
+  dialog.setAttribute('role', 'dialog');
+  dialog.setAttribute('aria-modal', 'true');
+  dialog.setAttribute('aria-label', t('hf.title'));
+  const header = document.createElement('header');
+  header.className = 'hf-header';
+  const backButton = document.createElement('button');
+  backButton.type = 'button';
+  backButton.className = 'btn';
+  backButton.dataset.i18n = 'hf.back';
+  backButton.addEventListener('click', onBack);
+  const heading = document.createElement('h2');
+  heading.dataset.i18n = 'hf.title';
+  header.append(backButton, heading);
+  const content = document.createElement('div');
+  content.className = 'hf-content';
+  const message = document.createElement('p');
+  message.dataset.i18n = errorKey[response.code] || 'hf.network';
+  const link = document.createElement('a');
+  link.href = 'https://huggingface.co/models';
+  link.target = '_blank';
+  link.rel = 'noopener noreferrer';
+  link.textContent = external;
+  content.append(message, link);
+  dialog.append(header, content);
+  applyTranslations(dialog);
+  host.replaceChildren(dialog);
+  backButton.focus();
+  dialog.addEventListener('keydown', event => {
+    if (event.key === 'Escape') onBack();
   });
-  back.addEventListener('click', () => {
-    if (!detail) { clearTimeout(searchTimer); onBack(); return; }
-    detail = null;
-    controls.hidden = readme.hidden = repoLink.hidden = true;
-    results.replaceChildren();
-    readme.querySelector('.md').replaceChildren();
-    intro.hidden = filters.hidden = search.closest('label').hidden = false;
-    label(back, 'hf.back');
-    showStatus(null);
-    showModels(true);
-  });
-  page.addEventListener('keydown', (event) => {
-    if (event.key === 'Escape') back.click();
-  });
-  applyTranslations(page);
-  host.replaceChildren(page);
-  searchCatalog();
 }

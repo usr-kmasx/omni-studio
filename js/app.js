@@ -31,8 +31,9 @@ import {
 } from './components/chat.js';
 import { restoreHfDownload } from './components/hf-catalog.js';
 import { backendRpc } from './components/backend-manager.js';
-import { historyAvailable, listHistory, loadHistory, newHistoryId, openHistory, saveHistory, setActiveHistory } from './components/history.js';
-import { mountImageWorkspace } from './components/images.js';
+import { historyAvailable, listHistory, loadHistory, newHistoryId, bindHistory, saveHistory, setActiveHistory } from './components/history.js';
+import { generateChatImage, exportChatImage } from './components/images.js';
+import { imageChatLabel } from './components/image-chat-labels.js';
 import { openSettings } from './components/settings.js';
 import { setLocale, t } from './i18n.js';
 import { applyTheme } from './theme.js';
@@ -121,9 +122,6 @@ function buildLiveInstructions() {
 
 // ---------- DOM ----------
 const chatArea = document.getElementById('chatArea');
-const statusChip = document.getElementById('statusChip');
-const statusDot = document.getElementById('statusDot');
-const statusLabel = document.getElementById('statusLabel');
 const modelLabel = document.getElementById('modelLabel');
 const composerHost = document.getElementById('composerHost');
 
@@ -159,75 +157,6 @@ let healthTimer = null;
 let statusRefreshRunning = false;
 let healthUrl = null;
 let healthFailures = 0;
-let confirmedOnline = false;
-
-let serverTransition = null;
-
-function nativeServerState() {
-  if (!window.webkit?.messageHandlers?.['omni-backend']) return null;
-  const backend = window.__omniBackend;
-  if (!backend) return { unknown: true };
-  const process = serverTransition || backend.state?.processState;
-  const external = backend.kind === 'external'
-    ? !(healthUrl === baseUrl() && healthFailures >= 2)
-    : !backend.integratedRunning && healthUrl === settings.serverUrl && confirmedOnline;
-  return { process, external, running: backend.integratedRunning };
-}
-
-function renderServerControl() {
-  const server = nativeServerState();
-  const transitioning = server?.process === 'starting' || server?.process === 'stopping';
-  statusChip.setAttribute('aria-disabled', String(!server || server.unknown || server.external || transitioning));
-  if (!server || server.unknown) {
-    statusChip.dataset.i18nAria = 'status.readOnly';
-    statusChip.setAttribute('aria-label', t('status.readOnly'));
-    return;
-  }
-  const online = server.external || server.running;
-  const label = transitioning ? 'backend.' + server.process : online ? 'status.online' : 'status.offline';
-  const hint = transitioning ? label : server.external ? 'status.externalReadOnly'
-    : server.running ? 'backend.stop' : 'backend.start';
-  statusDot.className = transitioning ? 'dot busy' : online ? 'dot ok' : 'dot err';
-  statusLabel.dataset.i18n = label;
-  statusLabel.textContent = t(label);
-  statusChip.dataset.i18nTitle = statusChip.dataset.i18nAria = hint;
-  statusChip.title = t(hint);
-  statusChip.setAttribute('aria-label', t(hint));
-}
-
-async function toggleIntegratedServer() {
-  const server = nativeServerState();
-  if (!server || server.unknown || server.external || serverTransition ||
-      ['starting', 'stopping'].includes(server.process)) return;
-  const stop = server.running;
-  if (stop && (state.busy || state.generating || state.voicePlayer?.playing)) {
-    if (!confirm(t('backend.stopConfirm'))) return;
-    state.abort?.abort();
-  }
-  if (stop && state.rt) endVoiceSession();
-  serverTransition = stop ? 'stopping' : 'starting';
-  renderServerControl();
-  try {
-    const result = await backendRpc(stop ? 'stop-integrated' : 'start-integrated', {
-      activate: !stop,
-      externalUrl: settings.serverUrl,
-    }, 180000);
-    if (result.state) window.__omniBackend = result.state;
-    if (!result.ok) {
-      const errors = {
-        not_installed: 'status.installIntegrated',
-        no_model_selected: 'status.chooseIntegratedModel',
-        external_backend_active: 'status.externalReadOnly',
-      };
-      appToast(t(errors[result.error?.code] || (stop ? 'backend.stopFailed' : 'backend.startFailed')), 'error');
-    }
-  } finally {
-    serverTransition = null;
-    renderServerControl();
-    void refreshStatus();
-  }
-}
-
 async function refreshStatus() {
   if (statusRefreshRunning) return;
   const url = baseUrl();
@@ -236,14 +165,12 @@ async function refreshStatus() {
     healthUrl = url;
     state.ctxSize = null;
     healthFailures = 0;
-    confirmedOnline = false;
   }
   statusRefreshRunning = true;
   try {
     await refreshStatusForUrl(url);
   } finally {
     statusRefreshRunning = false;
-    renderServerControl();
     if (url !== baseUrl()) void refreshStatus();
   }
 }
@@ -254,11 +181,6 @@ async function refreshStatusForUrl(url) {
 
   if (h.online) {
     healthFailures = 0;
-    confirmedOnline = true;
-    statusDot.className = 'dot ok';
-    statusLabel.textContent = t('status.online');
-    statusLabel.dataset.i18n = 'status.online';
-    updateStatusBusy();
     const [info, props] = await Promise.all([fetchModelInfo(url), fetchProps(url)]);
     if (url !== baseUrl()) return;
     if (state.rt && info.model?.id && state.rt.modelId && state.rt.modelId !== info.model.id) endVoiceSession();
@@ -267,44 +189,20 @@ async function refreshStatusForUrl(url) {
     modelLabel.textContent = id;
     delete modelLabel.dataset.i18n;
     document.title = `Omni Studio — ${id}`;
-    const ins = info.inputModalities ? info.inputModalities.join(', ') : ['media.text', 'media.image', 'media.audio', 'media.video'].map((key) => t(key)).join(', ');
-    const outs = info.outputModalities ? info.outputModalities.join(', ') : ['media.text', 'media.speech'].map((key) => t(key)).join(', ');
-    statusChip.title = t('status.modelTooltip', { id, inputs: ins, outputs: outs });
-    statusChip.dataset.i18nTitle = 'status.modelTooltip';
-    statusChip.dataset.i18nVarId = id;
-    statusChip.dataset.i18nVarInputs = ins;
-    statusChip.dataset.i18nVarOutputs = outs;
     if (info.caps) state.caps = info.caps;
     const generation = props?.default_generation_settings;
     const contextLimit = generation?.n_ctx ?? generation?.params?.n_ctx;
     if (Number.isFinite(contextLimit) && contextLimit > 0) state.ctxSize = contextLimit;
   } else {
     healthFailures = Math.min(healthFailures + 1, 2);
-    if (healthFailures < 2) {
-      if (!state.busy && !state.generating && statusDot.classList.contains('busy')) {
-        const label = confirmedOnline ? 'status.online' : 'status.connecting';
-        statusDot.className = confirmedOnline ? 'dot ok' : 'dot';
-        statusLabel.textContent = t(label);
-        statusLabel.dataset.i18n = label;
-      }
-      return;
-    }
-    confirmedOnline = false;
-    statusDot.className = 'dot err';
-    statusLabel.textContent = t('status.offline');
-    statusLabel.dataset.i18n = 'status.offline';
+    if (healthFailures < 2) return;
     modelLabel.textContent = t('status.serverOffline');
     modelLabel.dataset.i18n = 'status.serverOffline';
     document.title = 'Omni Studio';
-    statusChip.title = t('status.unavailable');
-    statusChip.dataset.i18nTitle = 'status.unavailable';
-    delete statusChip.dataset.i18nVarId;
-    delete statusChip.dataset.i18nVarInputs;
-    delete statusChip.dataset.i18nVarOutputs;
     state.caps = null;
     // Fallback integrado: pede ao gerenciador nativo que resolva o backend
     // ativo (inicia o llama.cpp isolado se habilitado) e reavalia.
-    if (window.__omniBackend?.integratedEnabled && !window.__omniBackend.state?.manualStop && !serverTransition && !state.resolvePending) {
+    if (window.__omniBackend?.integratedEnabled && !window.__omniBackend.state?.manualStop && !state.resolvePending) {
       state.resolvePending = true;
       try {
         window.webkit?.messageHandlers?.['omni-backend']?.postMessage(JSON.stringify({
@@ -321,17 +219,6 @@ async function refreshStatusForUrl(url) {
 function updateStatusBusy() {
   // Exposto para o gerenciador de backends saber se há geração ativa.
   window.__omniChatBusy = !!state.busy || !!state.generating;
-  if (nativeServerState()) {
-    renderServerControl();
-    return;
-  }
-  if (state.busy || state.generating) {
-    statusDot.className = 'dot busy';
-    statusLabel.textContent = t('status.processing');
-    statusLabel.dataset.i18n = 'status.processing';
-  } else if (statusDot.classList.contains('busy')) {
-    refreshStatus();
-  }
 }
 
 // ---------- texto: envio ----------
@@ -682,9 +569,9 @@ function persistConversation(conversation = state.textConv) {
     historyIds.set(conversation, id);
   }
   const snapshot = conversation
-    .filter((message) => message.role === 'user' || !!message.text?.trim())
-    .map(({ role, text, media, speech, transcribed, pendingTranscript, live }) => ({
-      role, text, media: [...(media || [])], speech, transcribed, pendingTranscript, live,
+    .filter((message) => message.role === 'user' || !!message.text?.trim() || (message.imageTurn && !message.inFlight))
+    .map(({ role, text, media, speech, transcribed, pendingTranscript, live, imageTurn, imageState }) => ({
+      role, text, media: [...(media || [])], speech, transcribed, pendingTranscript, live, imageTurn, imageState,
     }));
   historyWrites = historyWrites.then(async () => {
     await saveHistory(id, snapshot);
@@ -704,9 +591,121 @@ function trackedSubmit(draft) {
     composer.restoreDraft(draft);
     return;
   }
-  const pending = submitChat(draft);
+  const pending = draft.imageMode ? submitImage(draft) : submitChat(draft);
   pendingChat = pending;
   pending.finally(() => { if (pendingChat === pending) pendingChat = null; }).catch(console.error);
+}
+
+function imageResponse(message) {
+  const row = el(`<div class="msg assistant"><div class="avatar">${icon('image', 16)}</div>
+    <div class="body generated-image-result"></div></div>`);
+  const body = row.querySelector('.body');
+  const progressStatus = el('<p role="status"></p>');
+  const progressBar = el(`<progress data-i18n-aria="image.generating" aria-label="${t('image.generating')}"></progress>`);
+  function paint() {
+    body.replaceChildren();
+    const media = message.media?.[0];
+    if (media?.expired) {
+      const expired = el('<p class="msg-error"></p>');
+      expired.dataset.i18n = 'history.mediaExpired';
+      expired.dataset.i18nVarName = media.name;
+      expired.textContent = t('history.mediaExpired', { name: media.name });
+      body.append(expired);
+    } else if (media?.dataUrl) {
+      const preview = el('<img loading="lazy" tabindex="0">');
+      preview.alt = t('image.preview');
+      preview.src = media.dataUrl;
+      preview.addEventListener('click', () => showLightbox(preview.src));
+      preview.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          showLightbox(preview.src);
+        }
+      });
+      const save = el(`<button class="btn" type="button" data-i18n="image.export">${t('image.export')}</button>`);
+      save.addEventListener('click', async () => {
+        expireVisibleMedia();
+        if (media.expired) return;
+        save.disabled = true;
+        try { await exportChatImage(media); }
+        catch (error) { appToast(error.message || t('image.failed'), 'error'); }
+        finally { save.disabled = false; }
+      });
+      body.append(preview, save);
+    } else if (message.inFlight) {
+      progressStatus.textContent = t('image.generating');
+      body.append(progressStatus, progressBar);
+    } else {
+      const label = el('<p role="status"></p>');
+      label.textContent = message.imageState === 'cancelled'
+        ? imageChatLabel('cancelled') : message.error || t('image.failed');
+      body.append(label);
+    }
+  }
+  paint();
+  return {
+    row,
+    paint,
+    progress({ label, completed, total }) {
+      if (progressStatus.textContent !== label) progressStatus.textContent = label;
+      if (total > 0) {
+        progressBar.max = total;
+        progressBar.value = completed || 0;
+      } else progressBar.removeAttribute('value');
+    },
+  };
+}
+
+async function submitImage(draft) {
+  if (!draft.text.trim()) return;
+  if (state.busy || state.rt || liveStarting) {
+    composer.restoreDraft(draft);
+    return;
+  }
+  expireVisibleMedia();
+  const conversation = state.textConv;
+  const abort = new AbortController();
+  state.abort = abort;
+  state.activeReqId = newRequestId();
+  state.busy = true;
+  composer.setBusy(true);
+  hideHero(textList);
+  const prompt = { role: 'user', text: draft.text, media: [], imageTurn: true };
+  prompt.row = createUserBubble(prompt);
+  const message = { role: 'assistant', text: '', media: [], imageTurn: true, inFlight: true };
+  const response = imageResponse(message);
+  message.row = response.row;
+  message.refreshImage = response.paint;
+  conversation.push(prompt, message);
+  textList.append(prompt.row, message.row);
+  scrollBottom();
+  void persistConversation(conversation);
+  try {
+    const result = await generateChatImage(draft.text, {
+      signal: abort.signal,
+      onProgress: (value) => {
+        if (conversation === state.textConv) response.progress(value);
+      },
+    });
+    if (result && !abort.signal.aborted && conversation === state.textConv) message.media = [result];
+    else message.imageState = 'cancelled';
+  } catch (error) {
+    message.imageState = abort.signal.aborted ? 'cancelled' : 'failed';
+    message.error = error?.message;
+  } finally {
+    message.inFlight = false;
+    if (conversation === state.textConv) {
+      response.paint();
+      state.busy = false;
+      state.abort = null;
+      state.activeReqId = null;
+      composer.setBusy(false);
+      if (!message.media.length && !historySwitching) composer.restoreDraft(draft);
+      if (!historySwitching) composer.focus();
+      followChatSize();
+    }
+    void persistConversation(conversation);
+  }
 }
 
 function buildAssistant(message, conversation) {
@@ -737,6 +736,11 @@ function restoreConversation(chat) {
     if (message.role === 'user') {
       message.row = createUserBubble(message);
       textList.appendChild(message.row);
+    } else if (message.imageTurn) {
+      const response = imageResponse(message);
+      message.row = response.row;
+      message.refreshImage = response.paint;
+      textList.appendChild(response.row);
     } else {
       const { row, controller } = buildAssistant(message, state.textConv);
       textList.appendChild(row);
@@ -795,6 +799,7 @@ function expireVisibleMedia() {
       message.row.replaceWith(replacement);
       message.row = replacement;
     }
+    if (changed && message.imageTurn) message.refreshImage?.();
     if (expired(message.speech)) {
       message.historyController?.showExpiredSpeech();
       delete message.speech.url;
@@ -814,6 +819,7 @@ async function restoreSavedHistory() {
 
 // ---------- nova conversa (texto) ----------
 function newTextConversation() {
+  composer.setImageMode(false);
   composer.clearMetrics();
   closeVoiceSession();
   composer.cancelRecording();
@@ -1457,40 +1463,46 @@ document.getElementById('lightbox').addEventListener('click', hideLightbox);
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape') hideLightbox(); });
 
 // ---------- topbar ----------
-document.getElementById('btnSettings').addEventListener('click', () =>
-  openSettings({ onSaved: applySettings })
-);
-document.getElementById('btnNewChat').addEventListener('click', () => {
-  switchConversation(null).catch(historyError);
+const settingsTrigger = document.getElementById('btnSettings');
+let scheduleSettingsDismiss;
+function showSettings(fromHover = false) {
+  if (document.querySelector('#modalHost .modal')) return;
+  dismissHistory();
+  if (fromHover && document.activeElement === historyTrigger) historyTrigger.blur();
+  scheduleSettingsDismiss = openSettings({ onSaved: applySettings, trigger: settingsTrigger, fromHover });
+}
+settingsTrigger.addEventListener('pointerleave', () => scheduleSettingsDismiss?.());
+settingsTrigger.addEventListener('pointerenter', (event) => {
+  if (event.pointerType === 'mouse' || event.pointerType === 'pen') showSettings(true);
 });
-document.getElementById('btnHistory').addEventListener('click', () => {
-  if (historySwitching) return;
-  openHistory({
-    onOpen: (id) => switchConversation(id),
-    onDelete: async (id, remove) => {
-      if (historySwitching) return;
-      historySwitching = true;
-      try {
-        const isActive = id === historyIds.get(state.textConv);
-        if (isActive) {
-          state.abort?.abort();
-          closeVoiceSession();
-          await pendingChat;
-          await liveClosing;
-        }
-        await historyWrites;
-        await remove();
-        if (isActive) restoreConversation(null);
-      } finally {
-        historySwitching = false;
+settingsTrigger.addEventListener('click', () => showSettings());
+document.getElementById('chatTab').addEventListener('click', () => composer.focus());
+const historyTrigger = document.getElementById('btnHistory');
+const dismissHistory = bindHistory(historyTrigger, {
+  canOpen: () => !historySwitching,
+  onNew: () => switchConversation(null),
+  onOpen: (id) => switchConversation(id),
+  onDelete: async (id, remove) => {
+    if (historySwitching) return;
+    historySwitching = true;
+    try {
+      const isActive = id === historyIds.get(state.textConv);
+      if (isActive) {
+        state.abort?.abort();
+        closeVoiceSession();
+        await pendingChat;
+        await liveClosing;
       }
-    },
-    onError: historyError,
-  });
+      await historyWrites;
+      await remove();
+      if (isActive) restoreConversation(null);
+    } finally {
+      historySwitching = false;
+    }
+  },
+  onError: historyError,
 });
-statusChip.addEventListener('click', toggleIntegratedServer);
 window.addEventListener('omni-backend-snapshot', () => {
-  renderServerControl();
   if (baseUrl() !== healthUrl) void refreshStatus();
 });
 
@@ -1502,7 +1514,6 @@ function init() {
   buildVoiceUI();
   newTextConversation();
   mountView();
-  mountImageWorkspace();
   composerHost.appendChild(jumpToLatest);
   jumpToLatest.addEventListener('click', (event) => {
     scrollBottom();
@@ -1513,7 +1524,6 @@ function init() {
   chatSize.observe(chatArea);
   chatSize.observe(textList);
   composer.focus();
-  renderServerControl();
   refreshStatus();
   healthTimer = setInterval(refreshStatus, 5000);
   if (!settingsReady) appToast(t('settings.loadFailed'), 'error');

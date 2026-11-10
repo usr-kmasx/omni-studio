@@ -1,9 +1,10 @@
+import { textModelConversation } from './image-generation.js';
 export function submissionRoute(live, media) {
   return live && !media.length ? 'live' : 'chat';
 }
 
 export function liveContext(conversation) {
-  return conversation
+  return textModelConversation(conversation)
     .filter((message) => !message.inFlight)
     .map(({ role, text, media }) => ({
       role,

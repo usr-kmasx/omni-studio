@@ -35,11 +35,14 @@ export function installKeyboardFocus(modalHost) {
       dialog = next;
       dialog.tabIndex = -1;
       const stops = tabStops(dialog);
+      if (dialog.hasAttribute('data-passive-focus')) return;
       (stops.find((element) => element.hasAttribute('data-dialog-focus')) || stops[0] || dialog).focus();
     } else {
+      const preserveFocus = dialog?.hasAttribute('data-passive-focus') && document.activeElement !== document.body;
       dialog = null;
       const previous = returnFocus;
       returnFocus = null;
+      if (preserveFocus) return;
       if (previous?.isConnected && tabStops(document).includes(previous)) previous.focus();
       else tabStops(document)[0]?.focus();
     }

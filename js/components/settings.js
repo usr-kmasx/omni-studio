@@ -29,76 +29,72 @@ const UI_LANGUAGE_OPTIONS = [
   ['en', 'English'], ['pt', 'Português'], ['es', 'Español'], ['fr', 'Français'], ['de', 'Deutsch'],
 ].map(([code, name]) => `<option value="${code}">${name}</option>`).join('');
 
-export function openSettings({ onSaved, focusBackend = false, focusCatalog = false, focusImage = false }) {
+export function openSettings({ onSaved, focusBackend = false, focusCatalog = false, focusImage = false, trigger, fromHover = false }) {
   const settings = loadSettings();
 
   const modal = el(`
     <div class="modal-overlay">
-      <div class="modal settings-modal" role="dialog" aria-modal="true" aria-label="Settings" data-i18n-aria="settings.title">
-        <div class="modal-head">
-          <h3 data-i18n="settings.title"></h3>
-          <button class="icon-btn" data-close data-i18n-title="settings.close">${icon('close')}</button>
-        </div>
-        <div class="modal-body">
-          <div class="settings-section">
-            <div class="settings-section-head">
-              <span class="settings-section-title" data-i18n="settings.connection"></span>
-              <div class="settings-connection-actions">
-                <button class="btn hf-button" data-hf-catalog type="button" data-i18n-title="hf.title" data-i18n-aria="hf.title"><img src="vendor/huggingface-logo.svg" alt="" width="19" height="19"></button>
-              <button class="btn settings-manage" data-image-settings type="button">${icon('server', 15)} <span data-i18n="image.settings"></span></button>
-              <button class="btn settings-manage" data-backend-manager type="button">${icon('server', 15)} <span data-i18n="settings.backend"></span></button>
+      <div class="modal settings-modal omni-panel" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
+        <nav class="omni-settings-shortcuts">
+          <button class="btn omni-panel-icon" data-hf-catalog type="button" data-i18n-title="hf.title" data-i18n-aria="hf.title"><img src="vendor/huggingface-logo.svg" alt="" width="21" height="21"></button>
+          <div class="omni-backend-shortcuts">
+            <button class="btn omni-panel-icon" data-image-settings type="button" data-i18n-title="image.settings" data-i18n-aria="image.settings">${icon('image')}</button>
+            <button class="btn omni-panel-icon" data-backend-manager type="button" data-i18n-title="settings.backend" data-i18n-aria="settings.backend">${icon('server')}</button>
+          </div>
+        </nav>
+        <div class="omni-settings-preferences">
+          <div class="modal-body">
+            <h3 id="settingsTitle" data-i18n="settings.title"></h3>
+            <div class="settings-section">
+              <span class="settings-section-title" data-i18n="settings.appearance"></span>
+              <div class="row2">
+                <div class="field">
+                  <label for="set-theme" data-i18n="settings.theme"></label>
+                  <select id="set-theme">
+                    <option value="system" data-i18n="theme.system"></option>
+                    <option value="light" data-i18n="theme.light"></option>
+                    <option value="dark" data-i18n="theme.dark"></option>
+                    <option value="nord" data-i18n="theme.nord"></option>
+                  </select>
+                </div>
+                <div class="field">
+                  <label for="set-ui-language" data-i18n="settings.language"></label>
+                  <select id="set-ui-language">${UI_LANGUAGE_OPTIONS}</select>
+                </div>
               </div>
             </div>
-          </div>
 
-          <div class="settings-section">
-            <span class="settings-section-title" data-i18n="settings.appearance"></span>
-            <div class="row2">
-              <div class="field">
-                <label for="set-theme" data-i18n="settings.theme"></label>
-                <select id="set-theme">
-                  <option value="system" data-i18n="theme.system"></option>
-                  <option value="light" data-i18n="theme.light"></option>
-                  <option value="dark" data-i18n="theme.dark"></option>
-                  <option value="nord" data-i18n="theme.nord"></option>
-                </select>
+            <div class="settings-section">
+              <span class="settings-section-title" data-i18n="settings.voice"></span>
+              <div class="row2">
+                <div class="field">
+                  <label for="set-tts-lang" data-i18n="settings.ttsLanguage"></label>
+                  <select id="set-tts-lang">${spokenLanguages(settings.uiLanguage)}</select>
+                </div>
+                <div class="field">
+                  <label for="set-asr-lang" data-i18n="settings.asrLanguage"></label>
+                  <select id="set-asr-lang">${spokenLanguages(settings.uiLanguage)}</select>
+                </div>
               </div>
-              <div class="field">
-                <label for="set-ui-language" data-i18n="settings.language"></label>
-                <select id="set-ui-language">${UI_LANGUAGE_OPTIONS}</select>
+              <div class="row2">
+                <div class="field">
+                  <label for="set-voice" data-i18n="settings.voiceType"></label>
+                  <select id="set-voice">
+                    <option value="female" data-i18n="voice.female"></option>
+                    <option value="male" data-i18n="voice.male"></option>
+                  </select>
+                </div>
+                <label class="check-row settings-auto-speak">
+                  <input type="checkbox" id="set-auto-speak">
+                  <span data-i18n="settings.autoSpeak"></span>
+                </label>
               </div>
             </div>
           </div>
-
-          <div class="settings-section">
-            <span class="settings-section-title" data-i18n="settings.voice"></span>
-            <div class="row2">
-              <div class="field">
-                <label for="set-tts-lang" data-i18n="settings.ttsLanguage"></label>
-                <select id="set-tts-lang">${spokenLanguages(settings.uiLanguage)}</select>
-              </div>
-              <div class="field">
-                <label for="set-asr-lang" data-i18n="settings.asrLanguage"></label>
-                <select id="set-asr-lang">${spokenLanguages(settings.uiLanguage)}</select>
-              </div>
-            </div>
-            <div class="field">
-              <label for="set-voice" data-i18n="settings.voiceType"></label>
-              <select id="set-voice">
-                <option value="female" data-i18n="voice.female"></option>
-                <option value="male" data-i18n="voice.male"></option>
-              </select>
-            </div>
-            <label class="check-row settings-auto-speak">
-              <input type="checkbox" id="set-auto-speak">
-              <span data-i18n="settings.autoSpeak"></span>
-            </label>
+          <div class="modal-foot">
+            <button class="btn" data-cancel type="button" data-i18n="settings.cancel"></button>
+            <button class="btn primary" data-save type="button" data-i18n="settings.save"></button>
           </div>
-        </div>
-        <div class="modal-foot">
-          <span class="spacer"></span>
-          <button class="btn" data-cancel type="button" data-i18n="settings.cancel"></button>
-          <button class="btn primary" data-save type="button" data-i18n="settings.save"></button>
         </div>
       </div>
     </div>
@@ -114,14 +110,25 @@ export function openSettings({ onSaved, focusBackend = false, focusCatalog = fal
 
   const host = document.getElementById('modalHost');
   host.innerHTML = '';
+  const panel = modal.querySelector('.settings-modal');
+  if (fromHover) panel.dataset.passiveFocus = '';
   host.appendChild(modal);
 
-  const close = () => { host.innerHTML = ''; };
+  const close = () => { modal.remove(); };
+  let dismissTimer;
+  function scheduleDismiss() {
+    if (!trigger || !modal.isConnected) return;
+    clearTimeout(dismissTimer);
+    dismissTimer = setTimeout(() => {
+      if (!trigger.matches(':hover') && !panel.matches(':hover, :focus-within')) close();
+    }, 180);
+  }
+  panel.addEventListener('pointerleave', scheduleDismiss);
+  panel.addEventListener('focusout', scheduleDismiss);
 
   modal.addEventListener('click', (e) => {
     if (e.target === modal) close();
   });
-  modal.querySelector('[data-close]').addEventListener('click', close);
   modal.querySelector('[data-cancel]').addEventListener('click', close);
 
   const esc = (e) => { if (e.key === 'Escape') close(); };
@@ -165,13 +172,5 @@ export function openSettings({ onSaved, focusBackend = false, focusCatalog = fal
   imageButton.addEventListener('click', () => {
     openImageSettings(() => openSettings({ onSaved, focusImage: true }));
   });
+  return scheduleDismiss;
 }
-
-function escapeHtml(s) {
-  return String(s)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
-}
-function escapeAttr(s) { return escapeHtml(s).replace(/'/g, '&#39;'); }

@@ -1,3 +1,4 @@
+import { textModelConversation } from './image-generation.js';
 // ============================================================
 // Chat Completions (OpenAI-compatível) com streaming SSE.
 // Suporta texto, imagem, áudio e vídeo (partes multimodais).
@@ -75,7 +76,7 @@ export function messageToContent(msg, opts = {}) {
 export function conversationToMessages(conversation, opts = {}) {
   const messages = [];
   if (opts.system) messages.push({ role: 'system', content: opts.system });
-  for (const msg of conversation) {
+  for (const msg of textModelConversation(conversation)) {
     if (msg.role === 'assistant' && msg.inFlight) continue; // resposta em andamento
     const content = messageToContent(msg, opts);
     if (!content.length) continue;

@@ -350,9 +350,35 @@ pub fn catalog_variants(repo: &str) -> Result<(String, Vec<GgufVariant>, bool), 
 }
 
 pub fn gguf_variants_at(repo: &str, revision: Option<&str>) -> Result<(String, Vec<GgufVariant>), HfError> {
+    if revision.is_some_and(|sha| !valid_revision(sha)) {
+        return Err(HfError::Invalid("Invalid model revision".into()));
+    }
     let (revision, variants, gated) = variants_at(repo, revision)?;
     if gated { return Err(HfError::Http(403)); }
     Ok((revision, variants))
+}
+
+/// Resolve an exact Hub file or a single shard to a complete variant at a pinned commit.
+pub fn selected_model_variant(repo: &str, reference: &str, file: &str) -> Result<(String, String), HfError> {
+    let invalid = || HfError::Invalid("Invalid model file selection".into());
+    if reference.is_empty() || reference.len() > 250 || reference.contains(['\\', '\0']) ||
+        reference.split('/').any(|part| matches!(part, "" | "." | "..")) ||
+        !is_model_file(file) {
+        return Err(invalid());
+    }
+    let (revision, variants, gated) = variants_at(repo, Some(reference))?;
+    if gated { return Err(HfError::Http(403)); }
+    let variant = variants.into_iter().find(|v| v.files.iter().any(|part| part.path == file))
+        .ok_or_else(invalid)?;
+    Ok((revision, variant.name))
+}
+
+pub fn is_model_file(path: &str) -> bool {
+    path.len() <= 1024 && encoded_path(path).is_some() &&
+        path.rsplit_once('.').is_some_and(|(_, extension)| matches!(
+            extension.to_ascii_lowercase().as_str(),
+            "gguf" | "safetensors" | "sft" | "ckpt" | "pt" | "pth" | "bin"
+        ))
 }
 
 fn variants_at(repo: &str, revision: Option<&str>) -> Result<(String, Vec<GgufVariant>, bool), HfError> {
@@ -360,12 +386,11 @@ fn variants_at(repo: &str, revision: Option<&str>) -> Result<(String, Vec<GgufVa
     if repo.split('/').count() != 2 { return Err(invalid()); }
     let repo = encoded_path(repo).ok_or_else(invalid)?;
     let endpoint = match revision {
-        Some(sha) if valid_revision(sha) => format!("{API_BASE}/models/{repo}/revision/{sha}?blobs=true"),
-        Some(_) => return Err(invalid()),
+        Some(reference) => format!("{API_BASE}/models/{repo}/revision/{}?blobs=true", urlencode(reference)),
         None => format!("{API_BASE}/models/{repo}?blobs=true"),
     };
     let info = get_json(&endpoint)?;
-    if !visible_model(&info) { return Err(invalid()); }
+    if !visible_model(&info) { return Err(HfError::Http(403)); }
     let revision = info["sha"].as_str().filter(|s| s.len() == 40 && s.bytes().all(|b| b.is_ascii_hexdigit()))
         .ok_or_else(invalid)?.to_owned();
     let siblings = info["siblings"].as_array().ok_or_else(invalid)?;
@@ -391,9 +416,7 @@ fn group_gguf_files(siblings: &[serde_json::Value]) -> Vec<GgufVariant> {
     for item in siblings {
         let Some(path) = item["rfilename"].as_str() else { continue; };
         let Some((_, extension)) = path.rsplit_once('.') else { continue; };
-        let format = extension.to_ascii_lowercase();
-        if !matches!(format.as_str(), "gguf" | "safetensors" | "sft" | "ckpt" | "pt" | "pth" | "bin")
-            || encoded_path(path).is_none() { continue; }
+        if !is_model_file(path) { continue; }
         let key = shard(path).map_or_else(|| path.to_owned(), |(base, _, total)| {
             format!("{base}-of-{total:05}.{extension}")
         });
@@ -443,6 +466,43 @@ fn download_gguf_from(
     download_gguf_staged(resolve_base, repo, revision, variant, folder, staging.path(), cancel, None, progress)
 }
 
+fn child_directory(parent: &std::path::Path, name: &str) -> std::io::Result<std::path::PathBuf> {
+    use std::{fs, io};
+    if name.contains('/') || encoded_path(name).is_none() {
+        return Err(io::Error::new(io::ErrorKind::InvalidInput, "Invalid download subdirectory"));
+    }
+    let child = parent.join(name);
+    match fs::create_dir(&child) {
+        Ok(()) => {}
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+        Err(error) => return Err(error),
+    }
+    if !fs::symlink_metadata(&child)?.is_dir() {
+        return Err(io::Error::new(io::ErrorKind::AlreadyExists, "Download destination is not a directory"));
+    }
+    Ok(child)
+}
+
+/// Build the owner's subfolder only after the user confirms a destination.
+pub fn model_download_folder(root: &std::path::Path, repo: &str) -> std::io::Result<std::path::PathBuf> {
+    let (owner, _) = repo.split_once('/').filter(|_| repo.split('/').count() == 2 && encoded_path(repo).is_some())
+        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidInput, "Invalid model repository"))?;
+    child_directory(root, owner)
+}
+
+fn download_destination(folder: &std::path::Path, file: &str) -> std::io::Result<std::path::PathBuf> {
+    encoded_path(file).ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidInput, "Invalid model file path"))?;
+    let mut folder = folder.to_owned();
+    let mut parts = file.split('/').peekable();
+    while let Some(part) = parts.next() {
+        if parts.peek().is_none() {
+            return Ok(folder.join(part));
+        }
+        folder = child_directory(&folder, part)?;
+    }
+    unreachable!("encoded_path rejects empty file paths")
+}
+
 pub fn new_download_staging(folder: &std::path::Path) -> std::io::Result<std::path::PathBuf> {
     Ok(tempfile::Builder::new().prefix(".omni-gguf-").tempdir_in(folder)?.keep())
 }
@@ -478,9 +538,7 @@ fn download_gguf_staged(
     let revision = encoded_path(revision).ok_or_else(invalid)?;
     fs::create_dir_all(staging)?;
     let destinations = variant.files.iter().map(|file| {
-        encoded_path(&file.path).ok_or_else(invalid)?;
-        let name = file.path.rsplit('/').next().ok_or_else(invalid)?;
-        let dest = folder.join(name);
+        let dest = download_destination(folder, &file.path)?;
         match fs::symlink_metadata(&dest) {
             Ok(_) => return Err(io::Error::new(io::ErrorKind::AlreadyExists, "Model file already exists")),
             Err(e) if e.kind() != io::ErrorKind::NotFound => return Err(e),
@@ -615,6 +673,25 @@ mod catalog_tests {
             assert_eq!(std::fs::read(dir.path().join(name)).unwrap(), b"GGUF");
         }
         assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), filenames.len());
+    }
+
+    #[test]
+    fn owner_and_nested_directories_stay_below_the_chosen_folder() {
+        let root = tempfile::tempdir().unwrap();
+        let owner = model_download_folder(root.path(), "LiquidAI/model").unwrap();
+        assert_eq!(owner, root.path().join("LiquidAI"));
+        assert_eq!(model_download_folder(root.path(), "LiquidAI/other").unwrap(), owner);
+        assert!(model_download_folder(root.path(), "../model").is_err());
+        assert_eq!(download_destination(&owner, "text_encoder/model.safetensors").unwrap(),
+            owner.join("text_encoder/model.safetensors"));
+        assert!(download_destination(&owner, "../../model.safetensors").is_err());
+        #[cfg(unix)] {
+            let elsewhere = tempfile::tempdir().unwrap();
+            std::os::unix::fs::symlink(elsewhere.path(), owner.join("redirect")).unwrap();
+            assert!(download_destination(&owner, "redirect/file.gguf").is_err());
+            std::os::unix::fs::symlink(elsewhere.path(), root.path().join("Another")).unwrap();
+            assert!(model_download_folder(root.path(), "Another/model").is_err());
+        }
     }
 
     #[test]

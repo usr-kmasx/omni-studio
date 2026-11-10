@@ -91,29 +91,85 @@ export async function loadHistory(id) {
   return chat;
 }
 
-export function openHistory({ onOpen, onDelete, onError }) {
-  const host = document.getElementById('modalHost');
-  const overlay = document.createElement('div');
-  overlay.className = 'modal-overlay';
-  overlay.innerHTML = `
-    <section class="modal modal--tall history-modal" role="dialog" aria-modal="true" aria-labelledby="historyTitle">
+export function bindHistory(trigger, options) {
+  const host = trigger.closest('#topbar');
+  let dismiss;
+  function open({ keyboard = false } = {}) {
+    if (options.canOpen?.() === false) return;
+    const current = host.querySelector('#historyPanel');
+    if (current) {
+      if (keyboard) current.querySelector('#btnNewChat')?.focus();
+      return;
+    }
+    dismiss = openHistory({ ...options, trigger, host, keyboard });
+  }
+  trigger.addEventListener('pointerenter', (event) => {
+    if (event.pointerType === 'mouse' || event.pointerType === 'pen') open();
+  });
+  trigger.addEventListener('click', () => open({ keyboard: true }));
+  return () => dismiss?.();
+}
+
+export function openHistory({ onOpen, onDelete, onError, onNew, trigger, host, keyboard }) {
+  const panel = document.createElement('div');
+  panel.innerHTML = `
+    <section id="historyPanel" class="history-popover" role="dialog" aria-labelledby="historyTitle">
       <div class="modal-head">
         <h3 id="historyTitle">${t('history.title')}</h3>
-        <button class="icon-btn" type="button" data-close aria-label="${t('settings.close')}">${icon('close')}</button>
+        <div class="history-head-actions">
+          <button class="icon-btn" type="button" id="btnNewChat" data-i18n-title="action.newChat" data-i18n-aria="action.newChat" title="${t('action.newChat')}" aria-label="${t('action.newChat')}">${icon('plus', 16)}</button>
+          <button class="icon-btn" type="button" data-close aria-label="${t('settings.close')}">${icon('close')}</button>
+        </div>
       </div>
       <div class="modal-body">
         <p data-status role="status"></p>
         <ul class="history-list"></ul>
       </div>
     </section>`;
+  const overlay = panel.firstElementChild;
   const status = overlay.querySelector('[data-status]');
   const list = overlay.querySelector('ul');
+  const listeners = new AbortController();
+  const { signal } = listeners;
   let busy = false;
-  const close = () => { if (!busy) overlay.remove(); };
-  overlay.querySelector('[data-close]').addEventListener('click', close);
-  overlay.addEventListener('keydown', (event) => { if (event.key === 'Escape') close(); });
-  overlay.addEventListener('click', (event) => { if (event.target === overlay) close(); });
-  host.replaceChildren(overlay);
+  let closeTimer;
+  const clearClose = () => clearTimeout(closeTimer);
+  const close = ({ restoreFocus = false, force = false } = {}) => {
+    if (busy && !force) return;
+    clearClose();
+    listeners.abort();
+    overlay.remove();
+    trigger.setAttribute('aria-expanded', 'false');
+    if (restoreFocus) trigger.focus();
+  };
+  const scheduleClose = () => {
+    clearClose();
+    closeTimer = setTimeout(() => {
+      if (!trigger.matches(':hover, :focus-within') && !overlay.matches(':hover, :focus-within')) close();
+    }, 140);
+  };
+  for (const element of [trigger, overlay]) {
+    element.addEventListener('pointerenter', clearClose, { signal });
+    element.addEventListener('pointerleave', scheduleClose, { signal });
+    element.addEventListener('focusin', clearClose, { signal });
+    element.addEventListener('focusout', scheduleClose, { signal });
+  }
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && !event.defaultPrevented) {
+      const restoreFocus = trigger.contains(document.activeElement) || overlay.contains(document.activeElement);
+      close({ restoreFocus });
+    }
+  }, { signal });
+  document.addEventListener('pointerdown', (event) => {
+    if (!trigger.contains(event.target) && !overlay.contains(event.target)) close();
+  }, { signal });
+  overlay.querySelector('[data-close]').addEventListener('click', () => close({ restoreFocus: true }));
+  overlay.querySelector('#btnNewChat').addEventListener('click', () => run(async () => {
+    if (await onNew()) close({ force: true });
+  }));
+  host.appendChild(overlay);
+  trigger.setAttribute('aria-expanded', 'true');
+  if (keyboard) overlay.querySelector('#btnNewChat').focus();
 
   function action(key, glyph, handler) {
     const button = document.createElement('button');
@@ -131,7 +187,10 @@ export function openHistory({ onOpen, onDelete, onError }) {
     busy = true;
     try { await operation(); }
     catch { onError(); }
-    finally { busy = false; }
+    finally {
+      busy = false;
+      if (overlay.isConnected) scheduleClose();
+    }
   }
 
   function rename(row, target) {
@@ -188,7 +247,7 @@ export function openHistory({ onOpen, onDelete, onError }) {
       open.textContent = title;
       open.title = title;
       open.addEventListener('click', () => run(async () => {
-        if (await onOpen(row.id)) overlay.remove();
+        if (await onOpen(row.id)) close({ force: true });
       }));
       const edit = action('history.rename', 'edit', () => rename(row, edit));
       const pin = action(row.pinned ? 'history.unpin' : 'history.pin', 'pin', () => run(async () => {
@@ -210,4 +269,5 @@ export function openHistory({ onOpen, onDelete, onError }) {
   }
 
   refresh().catch(() => { status.textContent = t('history.failed'); });
+  return close;
 }

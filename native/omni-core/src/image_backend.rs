@@ -52,6 +52,7 @@ struct Settings {
     device: Device,
     model: Option<PathBuf>,
     components: Option<Components>,
+    generation: Option<Value>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -125,7 +126,6 @@ struct State {
     busy: bool,
     installing: bool,
     cancel: bool,
-    png: Option<Vec<u8>>,
 }
 
 pub struct ImageBackend {
@@ -232,31 +232,54 @@ impl ImageBackend {
         let installed = self.runtime_folder(state.settings.device).join("sd-server").is_file();
         json!({
             "device": state.settings.device, "model": state.settings.model, "components": state.settings.components,
-            "configured": state.settings.configured(),
+            "configured": state.settings.configured(), "generation": state.settings.generation,
             "installed": installed, "version": installed.then_some(VERSION),
             "phase": state.phase, "progress": state.progress, "busy": state.busy,
             "installing": state.installing, "pid": state.server.as_ref().map(|server| server.pid),
-            "hasImage": state.png.is_some(),
         })
     }
 
     pub fn save(&self, request: &Value) -> Result<()> {
         let next: Settings = serde_json::from_value(request.clone())?;
         next.validate_paths()?;
+        if let Some(parameters) = &next.generation {
+            validate_generation_settings(parameters)?;
+        }
         let mut state = self.state.lock().unwrap();
         if state.busy || state.installing || self.closing.load(Ordering::Acquire) {
             return Err("Image backend is busy".into());
         }
         if next != state.settings {
-            let parent = self.config.parent().ok_or("Missing image settings directory")?;
-            fs::create_dir_all(parent)?;
-            let temp = self.config.with_extension("tmp");
-            fs::write(&temp, serde_json::to_vec(&next)?)?;
-            fs::rename(temp, &self.config)?;
-            self.stop_locked(&mut state);
+            self.write_settings(&next)?;
+            if next.device != state.settings.device || next.model != state.settings.model ||
+                next.components != state.settings.components {
+                self.stop_locked(&mut state);
+            }
             state.settings = next;
         }
         Ok(())
+    }
+
+    fn write_settings(&self, settings: &Settings) -> Result<()> {
+        let parent = self.config.parent().ok_or("Missing image settings directory")?;
+        fs::create_dir_all(parent)?;
+        let temp = self.config.with_extension("tmp");
+        fs::write(&temp, serde_json::to_vec(settings)?)?;
+        fs::rename(temp, &self.config)?;
+        Ok(())
+    }
+
+    pub fn migrate_generation(&self, parameters: &Value) -> Result<Value> {
+        let mut state = self.state.lock().unwrap();
+        if let Some(saved) = &state.settings.generation {
+            return Ok(saved.clone());
+        }
+        validate_generation_settings(parameters)?;
+        let mut next = state.settings.clone();
+        next.generation = Some(parameters.clone());
+        self.write_settings(&next)?;
+        state.settings = next;
+        Ok(parameters.clone())
     }
 
     pub fn install(&self) -> Result<()> {
@@ -339,8 +362,13 @@ impl ImageBackend {
         if state.busy { state.cancel = true; }
     }
 
-    pub fn png(&self) -> Option<Vec<u8>> {
-        self.state.lock().unwrap().png.clone()
+    pub fn decode_export_png(data: &str) -> Option<Vec<u8>> {
+        const MAX_PNG: usize = 128 * 1024 * 1024;
+        if data.len() > MAX_PNG.div_ceil(3) * 4 {
+            return None;
+        }
+        let bytes = STANDARD.decode(data).ok()?;
+        (bytes.len() <= MAX_PNG && bytes.starts_with(PNG_HEADER)).then_some(bytes)
     }
 
     pub fn export_png(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
@@ -511,9 +539,8 @@ impl ImageBackend {
                     let data = job["result"]["images"][0]["b64_json"].as_str().ok_or("Image result is missing")?;
                     let png = STANDARD.decode(data)?;
                     if !png.starts_with(PNG_HEADER) { return Err("Invalid PNG response".into()); }
-                    let mut state = self.state.lock().unwrap();
+                    let state = self.state.lock().unwrap();
                     if state.cancel { return Ok(json!({"cancelled": true})); }
-                    state.png = Some(png);
                     return Ok(json!({ "png": data }));
                 }
                 Some("cancelled") => return Ok(json!({"cancelled": true})),
@@ -546,6 +573,13 @@ fn result_body_limit(payload: &Value) -> Result<u64> {
         .and_then(|bytes| bytes.checked_add(64 * 1024))
         .map(|bytes| bytes.max(MAX_BODY))
         .ok_or_else(|| "Image result size overflows the response budget".into())
+}
+
+fn validate_generation_settings(parameters: &Value) -> Result<()> {
+    let mut request = parameters.as_object().cloned().ok_or("Invalid image generation settings")?;
+    request.insert("prompt".into(), json!("Settings validation"));
+    generation_payload(&Value::Object(request))?;
+    Ok(())
 }
 
 fn generation_payload(request: &Value) -> Result<Value> {
@@ -635,6 +669,33 @@ fn owns_listener(pid: u32, port: u16) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn generation_preferences_migrate_once_and_validate_before_writing() {
+        let root = tempfile::tempdir().unwrap();
+        let backend = ImageBackend {
+            root: root.path().to_owned(),
+            config: root.path().join("image-settings.json"),
+            state: Mutex::new(State::default()),
+            closing: AtomicBool::new(false),
+            agent: ureq::Agent::new_with_defaults(),
+        };
+        assert!(backend.migrate_generation(&json!({"width": 0, "height": 512})).is_err());
+        assert!(!backend.config.exists());
+        let parameters = json!({"width":1920,"height":1080,"steps":30,"seed":0});
+        assert_eq!(backend.migrate_generation(&parameters).unwrap(), parameters);
+        assert_eq!(backend.migrate_generation(&json!({"width":10,"height":10})).unwrap(), parameters);
+        let loaded: Settings = serde_json::from_slice(&fs::read(&backend.config).unwrap()).unwrap();
+        assert_eq!(loaded.generation, Some(parameters));
+    }
+
+    #[test]
+    fn export_accepts_the_selected_png_and_rejects_non_png_payloads() {
+        let png = [PNG_HEADER, b"selected message"].concat();
+        assert_eq!(ImageBackend::decode_export_png(&STANDARD.encode(&png)), Some(png));
+        assert_eq!(ImageBackend::decode_export_png(&STANDARD.encode("not an image")), None);
+        assert_eq!(ImageBackend::decode_export_png("not base64"), None);
+    }
 
     #[test]
     fn keeps_complete_checkpoint_and_passes_split_weights() {

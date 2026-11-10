@@ -314,6 +314,7 @@ fn main() {
 fn build_ui(app: &gtk4::Application) {
     let site_root = locate_site_root();
 
+    let icon_directory = site_root.join("assets");
     let bundle = bundle::Bundle::discover(&site_root);
     let server = match site_server::SiteServer::start(site_root) {
         Ok(s) => s,
@@ -457,7 +458,7 @@ fn build_ui(app: &gtk4::Application) {
                         });
                     }
                 }
-                "hf-trending" | "hf-search" | "hf-variants" | "hf-readme" | "hf-open-link" | "hf-download" | "hf-cancel-download" | "hf-skip-verification" | "hf-pause-download" | "hf-resume-download" | "hf-download-status" => {
+                "hf-open-site" | "hf-download" | "hf-cancel-download" | "hf-skip-verification" | "hf-pause-download" | "hf-resume-download" | "hf-download-status" => {
                     if let Ok(request) = &parsed {
                         catalog.handle(&cmd, request, &view, window_holder.borrow().clone());
                     }
@@ -935,7 +936,12 @@ fn build_ui(app: &gtk4::Application) {
     let window = gtk4::ApplicationWindow::new(app);
     window.set_title(Some("Omni Studio"));
     window.set_default_size(1100, 760);
-    window.set_child(Some(&view));
+    gtk4::IconTheme::for_display(&gtk4::prelude::WidgetExt::display(&window))
+        .add_search_path(&icon_directory);
+    window.set_icon_name(Some(APP_ID));
+    let stack = gtk4::Stack::new();
+    stack.add_named(&view, Some("omni"));
+    window.set_child(Some(&stack));
     {
         let manager = manager.clone();
         window.connect_close_request(move |_| {

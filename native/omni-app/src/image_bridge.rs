@@ -17,11 +17,16 @@ pub fn handle(
 ) {
     if matches!(cmd, "image-select-model" | "image-export") {
         let export = cmd == "image-export";
-        let bytes = export.then(|| backend.png()).flatten();
-        let Some(parent) = parent.filter(|_| !export || bytes.is_some()) else {
+        // Defer decoding and writing large PNGs until the user accepts a path.
+        let encoded = export.then(|| request["png"].as_str())
+            .flatten()
+            .filter(|data| !data.is_empty())
+            .map(str::to_owned);
+        let Some(parent) = parent.filter(|_| !export || encoded.is_some()) else {
             publish_command_result(view, &json!({"requestId":id,"ok":false}));
             return;
         };
+        let encoded = RefCell::new(encoded);
         if dialogs.borrow().contains_key(&id) { return; }
         let title = request["title"].as_str();
         let accept = request["accept"].as_str();
@@ -41,14 +46,28 @@ pub fn handle(
         let key = id.clone();
         let registry = Rc::downgrade(dialogs);
         dialog.connect_response(move |dialog, response| {
+            if let Some(registry) = registry.upgrade() { registry.borrow_mut().remove(&id); }
+            let selected = dialog.file().and_then(|file| file.path());
+            if export && response == gtk4::ResponseType::Accept {
+                let encoded = encoded.borrow_mut().take();
+                let view = view.clone();
+                let id = id.clone();
+                let (tx, rx) = mpsc::channel();
+                dispatch_on_main(rx, move |payload| publish_command_result(&view, &payload));
+                std::thread::spawn(move || {
+                    let saved = selected.filter(|path| {
+                        path.extension().and_then(|ext| ext.to_str())
+                            .is_some_and(|ext| ext.eq_ignore_ascii_case("png"))
+                    }).zip(encoded).is_some_and(|(path, data)| {
+                        ImageBackend::decode_export_png(&data)
+                            .is_some_and(|bytes| ImageBackend::export_png(&path, &bytes).is_ok())
+                    });
+                    let _ = tx.send(json!({"requestId":id,"ok":saved}));
+                });
+                return;
+            }
             let payload = if response == gtk4::ResponseType::Accept {
-                match dialog.file().and_then(|file| file.path()) {
-                    Some(path) if export => {
-                        let is_png = path.extension().and_then(|ext| ext.to_str())
-                            .is_some_and(|ext| ext.eq_ignore_ascii_case("png"));
-                        let saved = is_png && bytes.as_deref().is_some_and(|png| ImageBackend::export_png(&path, png).is_ok());
-                        json!({"requestId":id,"ok":saved})
-                    }
+                match selected {
                     Some(path) if path.is_file() && path.to_str().is_some() => {
                         json!({"requestId":id,"ok":true,"result":{"path":path.to_str()}})
                     }
@@ -73,6 +92,7 @@ pub fn handle(
     std::thread::spawn(move || {
         let outcome = match cmd.as_str() {
             "image-status" => Ok(backend.snapshot()),
+            "image-migrate-generation" => backend.migrate_generation(&request["parameters"]),
             "image-save" => backend.save(&request["settings"]).map(|()| Value::Null),
             "image-install" => backend.install().map(|()| Value::Null),
             "image-generate" => backend.generate(&request),

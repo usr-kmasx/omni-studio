@@ -1,0 +1,157 @@
+:root[data-theme="dark"], :root:not([data-theme]) {
+  --bg: #202021;
+  --bg-soft: #262628;
+  --surface: #29292c;
+  --surface-2: #303034;
+  --surface-3: #39393d;
+  --border: #48494e;
+  --border-soft: #414145;
+  --text: #e9e9ec;
+  --text-dim: #b7b7bf;
+  --text-faint: #a6a7af;
+  --accent: #e2e2e7;
+  --accent-2: #bfcbd5;
+  --accent-soft: #414147;
+}
+body {
+  --omni-nav-bottom: 54px;
+  --omni-content-width: min(1035px, calc(100vw - 32px));
+}
+#topbar {
+  position: relative;
+  justify-content: center;
+  background: transparent;
+  border: 0;
+  padding: 8px 12px 6px;
+}
+.omni-navigation {
+  display: flex;
+  --nav-size: 34px;
+  --nav-gap: 4px;
+  --nav-position: 1;
+  position: relative;
+  isolation: isolate;
+  gap: var(--nav-gap);
+  padding: 3px;
+  background: var(--bg-soft);
+  border: 1px solid var(--border-soft);
+  border-radius: 12px;
+}
+.omni-navigation .icon-btn {
+  width: var(--nav-size);
+  height: var(--nav-size);
+  border-radius: 9px;
+}
+.omni-navigation::before {
+  content: "";
+  position: absolute;
+  inset: 3px auto auto 3px;
+  width: var(--nav-size);
+  height: var(--nav-size);
+  border-radius: 9px;
+  background: #f3f3f5;
+  pointer-events: none;
+  z-index: -1;
+  transform: translateX(calc(var(--nav-position) * (var(--nav-size) + var(--nav-gap))));
+  transition: transform 180ms ease;
+}
+.omni-navigation:has(#btnHistory[aria-expanded="true"], #btnHistory:focus-visible) { --nav-position: 0; }
+body:has(.settings-modal) .omni-navigation,
+.omni-navigation:has(#btnSettings:focus-visible) { --nav-position: 2; }
+.omni-navigation:has(#chatTab:focus-visible) { --nav-position: 1; }
+@media (hover: hover) {
+  .omni-navigation:has(#btnHistory:hover) { --nav-position: 0; }
+  .omni-navigation:has(#chatTab:hover) { --nav-position: 1; }
+  body .omni-navigation:has(#btnSettings:hover) { --nav-position: 2; }
+}
+.omni-navigation .icon-btn:is(.active, :hover, [aria-expanded="true"]) { background: transparent; }
+.omni-navigation .icon-btn { color: var(--text); }
+.omni-navigation .icon-btn svg { mix-blend-mode: difference; color: #e6e6ea; }
+@media (prefers-reduced-motion: reduce) {
+  .omni-navigation::before { transition: none; }
+}
+.omni-navigation svg {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+#composerHost { background: var(--bg); padding-bottom: clamp(12px, 3.4vh, 26px); }
+.composer { max-width: 770px; border-radius: 15px; box-shadow: none; }
+.composer:focus-within { border-color: var(--text-faint); }
+.composer textarea { min-height: 40px; }
+.composer-actions {
+  display: grid;
+  grid-template-columns: 1fr minmax(0, auto) 1fr;
+  gap: 6px;
+}
+.composer-actions .attach-group { grid-area: 1 / 1; justify-self: start; }
+.composer-actions .composer-metrics { grid-area: 1 / 2; }
+.composer-actions .composer-actions-right { grid-area: 1 / 3; justify-self: end; margin-left: 0; }
+.composer-actions .live-btn { background: var(--surface-3); border: 1px solid var(--border); }
+.composer-actions .live-btn:hover { background: var(--accent-soft); }
+.history-popover {
+  position: absolute;
+  z-index: 21;
+  top: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  width: var(--omni-content-width);
+  max-height: calc(100dvh - var(--omni-nav-bottom) - 120px);
+  background: var(--bg-soft);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: 0 12px 24px #0003;
+  display: flex;
+  flex-direction: column;
+}
+.history-popover .modal-head { padding: 8px 12px; flex: 0 0 auto; }
+.history-popover .modal-body { padding: 8px 12px; min-height: 0; overflow: auto; }
+.history-popover .history-head-actions { display: flex; gap: 6px; align-items: center; }
+.history-popover .history-list { margin-bottom: 0; }
+@media (max-width: 520px) {
+  .composer-actions { grid-template-columns: 1fr 1fr; }
+  .composer-actions .composer-actions-right { grid-area: 1 / 2; }
+  .composer-actions .composer-metrics { grid-area: 2 / 1 / 3 / 3; }
+}
+
+/* The initial canvas is intentionally empty in the redesigned Chat. */
+#chatArea .hero { display: none; }
+
+:root:is([data-theme="dark"], :not([data-theme])) .btn.primary {
+  background: var(--surface-3);
+  border-color: var(--border);
+  color: var(--text);
+  box-shadow: none;
+}
+:root:is([data-theme="dark"], :not([data-theme])) .btn.primary:hover:not(:disabled) {
+  background: var(--accent-soft);
+}
+:root:is([data-theme="dark"], :not([data-theme])) .send-btn:not(.stop) {
+  color: var(--bg);
+  box-shadow: none;
+}
+:root:is([data-theme="dark"], :not([data-theme])) .send-btn:not(.stop):hover { background: #c8c8ce; }
+:root:is([data-theme="dark"], :not([data-theme])) .msg.user .avatar {
+  color: var(--text);
+  background: var(--surface-3);
+}
+:root:is([data-theme="dark"], :not([data-theme])) :is(.mini-audio .ma-icon, .audio-player .pp-btn, .voice-bar .vb-btn.primary.active) {
+  color: var(--bg);
+}
+:root:is([data-theme="dark"], :not([data-theme])) .audio-player .pp-btn:hover {
+  background: #c8c8ce;
+}
+
+/* History and Settings start at the same content line below the navigation. */
+.modal-overlay:has(> .settings-modal) {
+  inset-block-start: var(--omni-nav-bottom);
+  padding: 0 16px 16px;
+  align-items: flex-start;
+}
+.modal-overlay > .settings-modal {
+  width: var(--omni-content-width);
+  max-height: calc(100dvh - var(--omni-nav-bottom) - 16px);
+}

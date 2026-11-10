@@ -1,0 +1,110 @@
+.composer .image-mode-btn[aria-pressed="true"] {
+  background: var(--text, #e9e9ec);
+  color: var(--bg, #202021);
+}
+.composer-image-mode .att-row,
+.composer-image-mode .composer-metrics { visibility: hidden; }
+.composer-image-mode .att-row { display: none; }
+.generated-image-result {
+  display: grid;
+  gap: 0.6rem;
+  justify-items: start;
+  min-width: 0;
+}
+.generated-image-result img {
+  display: block;
+  max-width: min(100%, 32rem);
+  max-height: 65vh;
+  width: auto;
+  height: auto;
+  border-radius: 0.75rem;
+  object-fit: contain;
+  cursor: zoom-in;
+}
+.generated-image-result progress { max-width: 100%; }
+.image-settings .image-generation-options {
+  display: grid;
+  gap: 0.75rem;
+  padding-top: 0.8rem;
+  border-top: 1px solid var(--border);
+}
+.image-settings .image-fields {
+  display: grid;
+  gap: 0.65rem;
+  grid-template-columns: repeat(auto-fit, minmax(min(8rem, 100%), 1fr));
+}
+.image-settings .image-generation-options details[open] summary { margin-bottom: 0.65rem; }
+.image-settings.omni-panel { width: min(844px, 100%); }
+.image-settings .omni-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 14px;
+  padding: 16px 20px 4px;
+}
+.image-settings .omni-panel-header h3 { flex: 1; display: flex; align-items: center; gap: 10px; }
+.image-settings .modal-body { display: grid; gap: 10px; padding: 12px 20px 8px; }
+.image-settings .modal-foot { justify-content: flex-end; }
+.image-settings-card {
+  padding: 12px 16px;
+  border: 1px solid var(--panel-border, var(--border));
+  border-radius: 12px;
+  background: var(--panel-card, var(--surface-2));
+  min-width: 0;
+}
+.image-settings .image-backend-card,
+.image-settings .image-backend-meta,
+.image-settings .image-settings-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.image-settings .image-backend-card { justify-content: space-between; }
+.image-settings .image-backend-meta { margin-top: 7px; }
+.image-settings .image-backend-meta small { color: var(--text-dim); }
+.image-settings .image-state-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--text-faint); }
+.image-settings .image-state-dot.is-ready { background: var(--green); }
+.image-settings .image-settings-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.image-settings .image-weight-row { display: flex; justify-content: space-between; gap: 10px; align-items: center; margin-top: 10px; }
+.image-settings .image-weight-row[hidden], .image-settings button[hidden] { display: none; }
+.image-settings .image-weight-row span,
+.image-settings .image-generation-options label { color: var(--text-dim); font-size: 12px; }
+.image-settings .image-weight-row b { display: block; margin-top: 4px; overflow-wrap: anywhere; }
+.image-settings .image-weight-row button { flex: none; }
+.image-settings .image-generation-options label { display: grid; gap: 5px; }
+.image-settings .image-generation-options :is(input, select, textarea) {
+  width: 100%;
+  box-sizing: border-box;
+  min-height: 36px;
+  padding: 6px 11px;
+  border: 1px solid var(--panel-border, var(--border));
+  border-radius: 7px;
+  color: var(--text);
+  background: var(--panel-control, var(--surface-3));
+  font: inherit;
+  font-size: 13px;
+}
+.image-settings .image-generation-options summary {
+  cursor: pointer;
+  padding: 8px 11px;
+  border-radius: 7px;
+  background: var(--panel-control, var(--surface-3));
+}
+.image-settings [role="alert"]:empty { display: none; }
+@media (max-width: 480px) {
+  .image-settings .omni-panel-header, .image-settings .modal-body { padding-inline: 10px; }
+  .image-settings .image-settings-grid { grid-template-columns: 1fr; }
+}
+.composer .image-mode-btn {
+  background: var(--surface-3, #303034);
+  border: 1px solid var(--border, #48494e);
+}
+.composer .image-mode-btn[aria-pressed="true"]:hover:not(:disabled) {
+  background: var(--text, #e9e9ec);
+  opacity: 0.88;
+}
+.image-settings .image-generation-options input { margin-top: 0; }
+.image-settings .image-generation-options :is(input, select, textarea):focus {
+  border-color: var(--text-faint);
+}
