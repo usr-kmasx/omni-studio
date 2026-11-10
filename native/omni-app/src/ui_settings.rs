@@ -23,8 +23,16 @@ pub fn read(path: &Path) -> io::Result<Value> {
 // Commands run in order on the GTK main thread. The small preference file
 // is replaced only after the complete new document has been written.
 pub fn write(path: &Path, value: &Value) -> io::Result<()> {
+    write_object(path, value, 16 * 1024)
+}
+
+pub fn write_image_draft(path: &Path, value: &Value) -> io::Result<()> {
+    write_object(path, value, 64 * 1024)
+}
+
+fn write_object(path: &Path, value: &Value, max_bytes: usize) -> io::Result<()> {
     let bytes = serde_json::to_vec(value)?;
-    if !value.is_object() || bytes.len() > 16 * 1024 {
+    if !value.is_object() || bytes.len() > max_bytes {
         return Err(io::Error::new(io::ErrorKind::InvalidInput, "Invalid UI settings"));
     }
     fs::create_dir_all(path.parent().ok_or(io::ErrorKind::InvalidInput)?)?;

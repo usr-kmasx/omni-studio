@@ -325,7 +325,8 @@ export function createComposer(hostEl, handlers = {}) {
   });
 
   textarea.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
+    // WebKit can report an IME confirmation as Enter with key code 229.
+    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && e.keyCode !== 229) {
       e.preventDefault();
       if (!busy && !recording && !micPending) submit();
     }

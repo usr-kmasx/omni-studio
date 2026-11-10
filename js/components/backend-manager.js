@@ -51,7 +51,7 @@ export function backendRpc(cmd, extra = {}, timeoutMs = 30000) {
     const id = newRequestId();
     pending.set(id, (res) => resolve(res));
     post(cmd, { requestId: id, ...extra });
-    setTimeout(() => {
+    if (timeoutMs > 0) setTimeout(() => {
       if (pending.has(id)) {
         pending.delete(id);
         resolve({ ok: false, kind: 'none', activeUrl: null, error: { code: 'timeout', message: t('backend.rpcTimeout') } });
@@ -118,7 +118,6 @@ export function openBackendManager({ onBack, onSettingsChanged } = {}) {
         </div>
 
         <div class="modal-body">
-
           <!-- Servidor local -->
           <div class="bm-section">
             <div class="bm-title"><span class="dot ${dotClass(!!s.externalOnline)}" id="bmExtDot"></span> ${t('backend.external')}</div>

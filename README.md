@@ -4,7 +4,7 @@ Aplicativo de desktop para conversar com modelos locais por texto, imagem, áudi
 
 ## Edição completa para Linux x86-64
 
-Extraia a pasta inteira do pacote de distribuição e execute `./launch.sh`. O sistema precisa de glibc compatível com o binário, GTK 4.10 ou superior e WebKitGTK 6.0. Instale também `ffmpeg` e `ffprobe` para enviar vídeos. A edição usa CPU no primeiro perfil. Para aceleração em uma máquina com Vulkan, ajuste as camadas na GPU em **Configurações → Servidores e modelos → Local**.
+Extraia a pasta inteira do pacote de distribuição e execute `./launch.sh`. O sistema precisa de glibc compatível com o binário, GTK 4.10 ou superior e WebKitGTK 6.0. Instale também `ffmpeg` e `ffprobe` para enviar vídeos. A edição usa CPU no primeiro perfil. Para aceleração em uma máquina com Vulkan, ajuste as camadas na GPU em **Configurações → llama.cpp → Local**.
 
 O pacote já contém os componentes necessários para iniciar o modelo sem baixar arquivos. Um servidor externo compatível, quando disponível, tem prioridade. Quem já usa o Omni Studio pode selecionar **Usar LFM3-Omni incluído** e salvar, ou continuar usando o modelo configurado. Mantenha a pasta inteira ao mover o app.
 
@@ -16,6 +16,14 @@ Use `tools/package-linux-complete.sh DIRETORIO_DE_INSUMOS BINARIO_RELEASE SAIDA.
 - `llama-b12202-bin-ubuntu-vulkan-x64.tar.gz` da [release b12202 do llama.cpp](https://github.com/ggml-org/llama.cpp/releases/tag/b12202).
 
 O script verifica os quatro SHA-256 e o limite de tamanho do GitHub Releases. O código do Omni Studio é MIT. Os pesos da Liquid AI são distribuídos sob a [LFM Open License v1.0](https://huggingface.co/LiquidAI/LFM3-Omni-2B-GGUF/blob/d508b88f08a5b4286f2d2805a6a8d69a0ff44c72/LICENSE).
+
+## Geração local de imagens
+
+No aplicativo desktop, abra **Configurações → stable-diffusion.cpp**. Escolha CPU ou Vulkan, selecione um checkpoint SD 1.5 de arquivo único em formato `.safetensors`, salve e instale o backend selecionado. O checkpoint é fornecido pelo usuário. Para usar a proteção de memória e gerar PNGs com dimensões exatas, coloque os [pacotes de runtime protegidos](tools/sd-runtime/README.md) ao lado do executável. Sem esses pacotes, o instalador usa o [sd-server oficial](https://github.com/leejet/stable-diffusion.cpp/releases/tag/master-1079-a3c49b1), com a faixa anterior de 256 a 1024 pixels em múltiplos de 64.
+
+Para modelos com pesos separados, escolha **Componentes separados** e indique a difusão, o codificador de texto e o VAE. Quando o modelo pedir uma sequência de ruído específica, informe os sigmas em **Avançado**. Em Vulkan, esse modo permite usar RAM para aliviar a VRAM.
+
+Na aba **Imagem**, escreva o prompt, escolha a resolução e clique em **Gerar**. A primeira geração carrega o modelo local. O modelo continua carregado ao cancelar, gerar novamente ou voltar ao Chat. Use **Parar backend** para liberar a memória.
 
 ## 1. Como executar a interface web de desenvolvimento
 

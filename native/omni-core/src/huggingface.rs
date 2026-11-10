@@ -292,24 +292,37 @@ pub struct GgufVariant {
     pub size: Option<u64>,
 }
 
-fn public_model(model: &serde_json::Value) -> bool {
+fn visible_model(model: &serde_json::Value) -> bool {
     model.get("private").and_then(|v| v.as_bool()) != Some(true)
         && model.get("disabled").and_then(|v| v.as_bool()) != Some(true)
-        && model.get("gated").is_none_or(|v| v.as_bool() == Some(false))
 }
 
-pub fn trending_gguf() -> Result<Vec<serde_json::Value>, HfError> {
-    catalog_models(&format!("{API_BASE}/models?filter=gguf&sort=trendingScore&direction=-1&limit=50"))
+fn gated_model(model: &serde_json::Value) -> bool {
+    model.get("gated").is_some_and(|value| !value.is_null() && value.as_bool() != Some(false))
 }
 
-pub fn search_gguf(query: &str) -> Result<Vec<serde_json::Value>, HfError> {
-    catalog_models(&format!("{API_BASE}/models?filter=gguf&search={}&limit=50", urlencode(query)))
+pub fn model_catalog(query: &str, format: &str, sort: &str) -> Result<Vec<serde_json::Value>, HfError> {
+    let format = match format {
+        "safetensors" => "safetensors",
+        "pytorch" => "pytorch",
+        _ => "gguf",
+    };
+    let (key, direction) = match sort {
+        "downloads" => ("downloads", -1),
+        "likes" => ("likes", -1),
+        "createdAt" => ("createdAt", -1),
+        "lastModified" => ("lastModified", -1),
+        "id" => ("id", 1),
+        _ => ("trendingScore", -1),
+    };
+    let search = urlencode(query);
+    catalog_models(&format!("{API_BASE}/models?filter={format}&sort={key}&direction={direction}&search={search}&limit=50"))
 }
 
 fn catalog_models(url: &str) -> Result<Vec<serde_json::Value>, HfError> {
     let models: Vec<serde_json::Value> = serde_json::from_value(get_json(url)?)
         .map_err(|e| HfError::Invalid(e.to_string()))?;
-    Ok(models.into_iter().filter(public_model).filter_map(|model| {
+    Ok(models.into_iter().filter(visible_model).filter_map(|model| {
         let id = model["id"].as_str()?;
         let (author, name) = id.split_once('/')?;
         Some(serde_json::json!({ "id": id, "author": author, "name": name }))
@@ -325,18 +338,25 @@ fn encoded_path(path: &str) -> Option<String> {
 }
 
 fn shard(path: &str) -> Option<(&str, usize, usize)> {
-    let (stem, total) = path.strip_suffix(".gguf")?.rsplit_once("-of-")?;
+    let (stem, _) = path.rsplit_once('.')?;
+    let (stem, total) = stem.rsplit_once("-of-")?;
     let (base, index) = stem.rsplit_once('-')?;
     if index.len() != 5 || total.len() != 5 { return None; }
     Some((base, index.parse().ok()?, total.parse().ok()?))
 }
 
-pub fn gguf_variants(repo: &str) -> Result<(String, Vec<GgufVariant>), HfError> {
-    gguf_variants_at(repo, None)
+pub fn catalog_variants(repo: &str) -> Result<(String, Vec<GgufVariant>, bool), HfError> {
+    variants_at(repo, None)
 }
 
 pub fn gguf_variants_at(repo: &str, revision: Option<&str>) -> Result<(String, Vec<GgufVariant>), HfError> {
-    let invalid = || HfError::Invalid("Invalid GGUF repository or metadata".into());
+    let (revision, variants, gated) = variants_at(repo, revision)?;
+    if gated { return Err(HfError::Http(403)); }
+    Ok((revision, variants))
+}
+
+fn variants_at(repo: &str, revision: Option<&str>) -> Result<(String, Vec<GgufVariant>, bool), HfError> {
+    let invalid = || HfError::Invalid("Invalid model repository or metadata".into());
     if repo.split('/').count() != 2 { return Err(invalid()); }
     let repo = encoded_path(repo).ok_or_else(invalid)?;
     let endpoint = match revision {
@@ -345,11 +365,11 @@ pub fn gguf_variants_at(repo: &str, revision: Option<&str>) -> Result<(String, V
         None => format!("{API_BASE}/models/{repo}?blobs=true"),
     };
     let info = get_json(&endpoint)?;
-    if !public_model(&info) { return Err(invalid()); }
+    if !visible_model(&info) { return Err(invalid()); }
     let revision = info["sha"].as_str().filter(|s| s.len() == 40 && s.bytes().all(|b| b.is_ascii_hexdigit()))
         .ok_or_else(invalid)?.to_owned();
     let siblings = info["siblings"].as_array().ok_or_else(invalid)?;
-    Ok((revision, group_gguf_files(siblings)))
+    Ok((revision, group_gguf_files(siblings), gated_model(&info)))
 }
 
 fn valid_revision(sha: &str) -> bool {
@@ -360,7 +380,7 @@ pub fn catalog_readme(repo: &str, revision: &str) -> Option<String> {
     use std::io::Read;
     if repo.split('/').count() != 2 || !valid_revision(revision) { return None; }
     let repo = encoded_path(repo)?;
-    let response = agent().get(&format!("{RESOLVE_BASE}/{repo}/raw/{revision}/README.md")).call().ok()?;
+    let response = agent().get(&format!("{RESOLVE_BASE}/{repo}/resolve/{revision}/README.md")).call().ok()?;
     let mut text = String::new();
     response.into_body().into_reader().read_to_string(&mut text).ok()?;
     (!text.trim().is_empty()).then_some(text)
@@ -370,9 +390,12 @@ fn group_gguf_files(siblings: &[serde_json::Value]) -> Vec<GgufVariant> {
     let mut groups = std::collections::BTreeMap::<String, Vec<GgufFile>>::new();
     for item in siblings {
         let Some(path) = item["rfilename"].as_str() else { continue; };
-        if !path.to_ascii_lowercase().ends_with(".gguf") || encoded_path(path).is_none() { continue; }
+        let Some((_, extension)) = path.rsplit_once('.') else { continue; };
+        let format = extension.to_ascii_lowercase();
+        if !matches!(format.as_str(), "gguf" | "safetensors" | "sft" | "ckpt" | "pt" | "pth" | "bin")
+            || encoded_path(path).is_none() { continue; }
         let key = shard(path).map_or_else(|| path.to_owned(), |(base, _, total)| {
-            format!("{base}-of-{total:05}.gguf")
+            format!("{base}-of-{total:05}.{extension}")
         });
         groups.entry(key).or_default().push(GgufFile {
             path: path.to_owned(),
@@ -450,7 +473,7 @@ fn download_gguf_staged(
 ) -> Result<(), crate::downloads::DownloadError> {
     use std::{fs, io, sync::atomic::Ordering};
     use crate::downloads::{self, DownloadError};
-    let invalid = || io::Error::new(io::ErrorKind::InvalidInput, "Invalid GGUF path");
+    let invalid = || io::Error::new(io::ErrorKind::InvalidInput, "Invalid model file path");
     let repo = encoded_path(repo).ok_or_else(invalid)?;
     let revision = encoded_path(revision).ok_or_else(invalid)?;
     fs::create_dir_all(staging)?;
@@ -459,7 +482,7 @@ fn download_gguf_staged(
         let name = file.path.rsplit('/').next().ok_or_else(invalid)?;
         let dest = folder.join(name);
         match fs::symlink_metadata(&dest) {
-            Ok(_) => return Err(io::Error::new(io::ErrorKind::AlreadyExists, "GGUF already exists")),
+            Ok(_) => return Err(io::Error::new(io::ErrorKind::AlreadyExists, "Model file already exists")),
             Err(e) if e.kind() != io::ErrorKind::NotFound => return Err(e),
             _ => {}
         }
@@ -481,7 +504,7 @@ fn download_gguf_staged(
         )?; }
         let size = fs::metadata(&staged)?.len();
         if file.size.is_some_and(|expected| expected != size) {
-            return Err(io::Error::new(io::ErrorKind::InvalidData, "Incomplete GGUF").into());
+            return Err(io::Error::new(io::ErrorKind::InvalidData, "Incomplete model file").into());
         }
         completed = completed.saturating_add(size);
     }
@@ -516,6 +539,23 @@ mod catalog_tests {
     use super::*;
 
     #[test]
+    fn lists_multiple_weight_formats_and_groups_safetensors_shards() {
+        let files = serde_json::json!([
+            {"rfilename":"model-00001-of-00002.safetensors","size":10},
+            {"rfilename":"model-00002-of-00002.safetensors","size":20},
+            {"rfilename":"vae/model.safetensors","size":5},
+            {"rfilename":"diffusion-Q4_0.gguf","size":15},
+            {"rfilename":"weights.ckpt","size":25},
+            {"rfilename":"README.md","size":1}
+        ]);
+        let variants = group_gguf_files(files.as_array().unwrap());
+        assert_eq!(variants.len(), 4);
+        let split = variants.iter().find(|v| v.files.len() == 2).unwrap();
+        assert_eq!(split.size, Some(30));
+        assert!(split.name.ends_with(".safetensors"));
+    }
+
+    #[test]
     fn groups_only_complete_variants_and_marks_projectors() {
         let files = serde_json::json!([
             {"rfilename":"q4/model-00002-of-00002.gguf", "size":20},
@@ -536,9 +576,10 @@ mod catalog_tests {
 
     #[test]
     fn ignores_models_requiring_account_or_approval() {
-        assert!(public_model(&serde_json::json!({"gated":false})));
-        assert!(!public_model(&serde_json::json!({"gated":"manual"})));
-        assert!(!public_model(&serde_json::json!({"private":true})));
+        assert!(!gated_model(&serde_json::json!({"gated":false})));
+        assert!(visible_model(&serde_json::json!({"gated":"manual"})));
+        assert!(gated_model(&serde_json::json!({"gated":"auto"})));
+        assert!(!visible_model(&serde_json::json!({"private":true})));
     }
 
     #[test]
@@ -546,7 +587,7 @@ mod catalog_tests {
         use std::io::{BufRead, BufReader, Write};
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let base = format!("http://{}", listener.local_addr().unwrap());
-        let filenames = ["single.gguf", "split-00001-of-00002.gguf", "split-00002-of-00002.gguf"];
+        let filenames = ["single.gguf", "split-00001-of-00002.gguf", "split-00002-of-00002.gguf", "vae.safetensors"];
         let server = std::thread::spawn(move || {
             for name in filenames {
                 let (mut stream, _) = listener.accept().unwrap();
@@ -573,7 +614,7 @@ mod catalog_tests {
         for name in filenames {
             assert_eq!(std::fs::read(dir.path().join(name)).unwrap(), b"GGUF");
         }
-        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 3);
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), filenames.len());
     }
 
     #[test]

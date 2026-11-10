@@ -20,7 +20,8 @@
 
     <div class="tabs" id="viewTabs" role="tablist">
       <button class="tab" id="btnHistory" type="button" data-i18n="history.title" aria-haspopup="dialog">History</button>
-      <button class="tab active" data-view="text" role="tab" aria-selected="true" data-i18n="tab.text">Chat</button>
+      <button class="tab active" id="chatTab" data-view="text" role="tab" aria-controls="chatArea" aria-selected="true" data-i18n="tab.text">Chat</button>
+      <button class="tab" id="imageTab" type="button" role="tab" aria-controls="imageArea" aria-selected="false" data-i18n="image.tab">Image</button>
     </div>
 
     <div class="header-right">
@@ -38,6 +39,7 @@
   </header>
 
   <main id="chatArea" aria-live="polite"></main>
+  <main id="imageArea" role="tabpanel" aria-labelledby="imageTab" hidden></main>
 
   <section id="composerHost"></section>
 

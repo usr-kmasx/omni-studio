@@ -1,3 +1,4 @@
+import { openImageSettings } from './images.js';
 // ============================================================
 // Modal de configurações + teste de conexão
 // ============================================================
@@ -28,7 +29,7 @@ const UI_LANGUAGE_OPTIONS = [
   ['en', 'English'], ['pt', 'Português'], ['es', 'Español'], ['fr', 'Français'], ['de', 'Deutsch'],
 ].map(([code, name]) => `<option value="${code}">${name}</option>`).join('');
 
-export function openSettings({ onSaved, focusBackend = false, focusCatalog = false }) {
+export function openSettings({ onSaved, focusBackend = false, focusCatalog = false, focusImage = false }) {
   const settings = loadSettings();
 
   const modal = el(`
@@ -44,6 +45,7 @@ export function openSettings({ onSaved, focusBackend = false, focusCatalog = fal
               <span class="settings-section-title" data-i18n="settings.connection"></span>
               <div class="settings-connection-actions">
                 <button class="btn hf-button" data-hf-catalog type="button" data-i18n-title="hf.title" data-i18n-aria="hf.title"><img src="vendor/huggingface-logo.svg" alt="" width="19" height="19"></button>
+              <button class="btn settings-manage" data-image-settings type="button">${icon('server', 15)} <span data-i18n="image.settings"></span></button>
               <button class="btn settings-manage" data-backend-manager type="button">${icon('server', 15)} <span data-i18n="settings.backend"></span></button>
               </div>
             </div>
@@ -153,7 +155,15 @@ export function openSettings({ onSaved, focusBackend = false, focusCatalog = fal
   const backendButton = modal.querySelector('[data-backend-manager]');
   if (focusBackend) backendButton.setAttribute('data-dialog-focus', '');
   backendButton.addEventListener('click', () => {
-    openBackendManager({ onBack: () => openSettings({ onSaved, focusBackend: true }), onSettingsChanged: onSaved });
+    openBackendManager({
+      onBack: () => openSettings({ onSaved, focusBackend: true }),
+      onSettingsChanged: onSaved,
+    });
+  });
+  const imageButton = modal.querySelector('[data-image-settings]');
+  if (focusImage) imageButton.setAttribute('data-dialog-focus', '');
+  imageButton.addEventListener('click', () => {
+    openImageSettings(() => openSettings({ onSaved, focusImage: true }));
   });
 }
 

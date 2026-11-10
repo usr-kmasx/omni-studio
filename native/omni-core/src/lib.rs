@@ -13,6 +13,7 @@ pub mod downloads;
 pub mod engine;
 pub mod guards;
 pub mod huggingface;
+pub mod image_backend;
 pub mod model_manager;
 pub mod paths;
 pub mod process;

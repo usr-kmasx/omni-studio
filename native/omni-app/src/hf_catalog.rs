@@ -152,15 +152,16 @@ impl CatalogBridge {
             let view = view.clone();
             let cmd = cmd.to_owned();
             let query: String = request["query"].as_str().unwrap_or_default().chars().take(160).collect();
+            let format = request["format"].as_str().unwrap_or_default().to_owned();
+            let sort = request["sort"].as_str().unwrap_or_default().to_owned();
             let (tx, rx) = mpsc::channel();
             dispatch_on_main(rx, move |payload| publish_command_result(&view, &payload));
             std::thread::spawn(move || {
                 let result = match cmd.as_str() {
-                    "hf-trending" => huggingface::trending_gguf().map(|models| json!(models)),
-                    "hf-search" => huggingface::search_gguf(&query).map(|models| json!(models)),
+                    "hf-trending" | "hf-search" => huggingface::model_catalog(&query, &format, &sort).map(|models| json!(models)),
                     "hf-readme" => Ok(json!(huggingface::catalog_readme(&repo, &revision))),
-                    _ => huggingface::gguf_variants(&repo).map(|(revision, variants)| {
-                        json!({ "revision": revision, "variants": variants })
+                    _ => huggingface::catalog_variants(&repo).map(|(revision, variants, gated)| {
+                        json!({ "revision": revision, "variants": variants, "gated": gated })
                     }),
                 };
                 let payload = match result {

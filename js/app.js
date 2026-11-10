@@ -32,6 +32,7 @@ import {
 import { restoreHfDownload } from './components/hf-catalog.js';
 import { backendRpc } from './components/backend-manager.js';
 import { historyAvailable, listHistory, loadHistory, newHistoryId, openHistory, saveHistory, setActiveHistory } from './components/history.js';
+import { mountImageWorkspace } from './components/images.js';
 import { openSettings } from './components/settings.js';
 import { setLocale, t } from './i18n.js';
 import { applyTheme } from './theme.js';
@@ -1501,6 +1502,7 @@ function init() {
   buildVoiceUI();
   newTextConversation();
   mountView();
+  mountImageWorkspace();
   composerHost.appendChild(jumpToLatest);
   jumpToLatest.addEventListener('click', (event) => {
     scrollBottom();

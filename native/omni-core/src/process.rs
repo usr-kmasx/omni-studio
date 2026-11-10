@@ -249,6 +249,9 @@ impl RunningServer {
         if self.stopped.swap(true, Ordering::SeqCst) {
             return;
         }
+        if matches!(self.child.try_wait(), Ok(Some(_))) {
+            return;
+        }
         unsafe {
             libc::kill(self.pid as libc::pid_t, libc::SIGTERM);
         }
@@ -277,8 +280,8 @@ fn endpoint_from_args(args: &[String]) -> String {
     let mut i = 0;
     while i + 1 < args.len() {
         match args[i].as_str() {
-            "--host" => host = args[i + 1].clone(),
-            "--port" => port = args[i + 1].clone(),
+            "--host" | "--listen-ip" => host = args[i + 1].clone(),
+            "--port" | "--listen-port" => port = args[i + 1].clone(),
             _ => {}
         }
         i += 1;

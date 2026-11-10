@@ -9,6 +9,7 @@ mod backend_manager;
 mod bundle;
 mod hf_catalog;
 mod history;
+mod image_bridge;
 mod site_server;
 mod ui_settings;
 
@@ -217,6 +218,15 @@ fn locate_site_root() -> PathBuf {
             return p;
         }
     }
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(directory) = exe.parent() {
+            let site = directory.join("omni-site");
+            if site.join("index.html").is_file() {
+                log::info!("site root (ao lado do executável): {}", site.display());
+                return site;
+            }
+        }
+    }
     if let Ok(mut d) = std::env::current_dir() {
         loop {
             if d.join("index.html").is_file() {
@@ -334,9 +344,14 @@ fn build_ui(app: &gtk4::Application) {
 
     // ---------- Gerenciador de backends + ponte JS ↔ Rust ----------
     let manager = Arc::new(BackendManager::with_bundle(&server.base_url, bundle));
+    let images = Arc::new(omni_core::image_backend::ImageBackend::new());
     {
         let manager = manager.clone();
-        app.connect_shutdown(move |_| manager.shutdown());
+        let images = images.clone();
+        app.connect_shutdown(move |_| {
+            images.shutdown();
+            manager.shutdown();
+        });
     }
     let window_holder = Rc::new(RefCell::new(None::<gtk4::Window>));
     // Diálogos nativos pendentes, mantidos vivos até a resposta (requestId → FileChooserNative).
@@ -348,6 +363,7 @@ fn build_ui(app: &gtk4::Application) {
         let view = view.clone();
         let window_holder = window_holder.clone();
         let dialogs = dialogs.clone();
+        let image_commands = images.clone();
         // 1) conecta o sinal ANTES de registrar o handler (recomendação
         //    oficial do WebKitGTK para evitar condições de corrida).
         let catalog = hf_catalog::CatalogBridge::new();
@@ -385,11 +401,24 @@ fn build_ui(app: &gtk4::Application) {
                 Err(_) => None,
             };
             match cmd.as_str() {
-                "ui-settings-get" | "ui-settings-save" => {
+                command if command.starts_with("image-") => {
                     if let (Ok(request), Some(id)) = (parsed, request_id) {
-                        let path = omni_core::paths::config_dir().join("ui-settings.json");
-                        let result = if cmd == "ui-settings-get" {
+                        image_bridge::handle(
+                            &image_commands, &view, window_holder.borrow().as_ref(),
+                            &dialogs, &cmd, request, id,
+                        );
+                    }
+                }
+                "ui-settings-get" | "ui-settings-save" | "draft-image-get" | "draft-image-save" => {
+                    if let (Ok(request), Some(id)) = (parsed, request_id) {
+                        let image_draft = cmd.starts_with("draft-image-");
+                        let filename = if image_draft { "image-draft.json" } else { "ui-settings.json" };
+                        let path = omni_core::paths::config_dir().join(filename);
+                        let result = if cmd.ends_with("-get") {
                             ui_settings::read(&path)
+                        } else if image_draft {
+                            ui_settings::write_image_draft(&path, &request["settings"])
+                                .map(|()| serde_json::Value::Null)
                         } else {
                             ui_settings::write(&path, &request["settings"])
                                 .map(|()| serde_json::Value::Null)
@@ -397,7 +426,7 @@ fn build_ui(app: &gtk4::Application) {
                         let reply = match result {
                             Ok(value) => serde_json::json!({ "requestId": id, "ok": true, "result": value }),
                             Err(error) => {
-                                log::warn!("UI settings: {error}");
+                                log::warn!("{filename}: {error}");
                                 serde_json::json!({ "requestId": id, "ok": false, "code": "storage" })
                             }
                         };
@@ -910,6 +939,7 @@ fn build_ui(app: &gtk4::Application) {
     {
         let manager = manager.clone();
         window.connect_close_request(move |_| {
+            images.shutdown();
             manager.shutdown();
             glib::Propagation::Proceed
         });

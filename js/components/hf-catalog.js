@@ -283,6 +283,21 @@ function safeUrl(value, base) {
   return null;
 }
 
+function readmeImageUrl(value, base) {
+  const safe = safeUrl(value, base);
+  if (!safe) return null;
+  const url = new URL(safe);
+  // A repository file viewer returns HTML. Images need the file response.
+  if (url.hostname === 'huggingface.co') {
+    url.pathname = url.pathname.replace(
+      /^((?:\/(?:datasets|spaces))?\/[^/]+\/[^/]+)\/(?:blob|raw)\//, '$1/resolve/',
+    );
+  } else if (url.hostname === 'github.com' && /^\/[^/]+\/[^/]+\/blob\//.test(url.pathname)) {
+    url.searchParams.set('raw', 'true');
+  }
+  return url.href;
+}
+
 const readmeTags = new Set((
   'a abbr b blockquote br caption code dd del details div dl dt em figcaption figure h1 h2 h3 h4 h5 h6 ' +
   'hr i img kbd li mark ol p pre s small span strong sub summary sup table tbody td th thead tfoot tr ul'
@@ -311,7 +326,7 @@ function copyReadmeNode(node, target, linkBase, assetBase) {
     }
     if (tag === 'img') {
       const raw = node.getAttribute('src');
-      const src = raw && safeUrl(raw, assetBase);
+      const src = raw && readmeImageUrl(raw, assetBase);
       if (!src) return;
       element.loading = 'lazy';
       element.referrerPolicy = 'no-referrer';
@@ -353,6 +368,16 @@ async function renderReadme(markdown, repoUrl, revision) {
   return content;
 }
 
+function weightVariant(variant) {
+  const filename = variant.name.split('/').at(-1);
+  const extension = filename.split('.').at(-1).toLowerCase();
+  if (variant.projector) return { group: 'projector', name: filename };
+  const stem = filename.slice(0, -extension.length - 1);
+  const quant = stem.match(/(?:^|[-.])((?:UD-)?(?:IQ|TQ|Q)([1-9])(?:_[A-Z0-9]+)*|((?:BF|FP|F|INT|NVFP|MXFP)(4|8|16|32))(?:_[A-Z0-9]+)*)(?=$|[-.])/i);
+  return quant ? { group: Number(quant[2] || quant[4]), name: quant[1] }
+    : { group: extension, name: filename };
+}
+
 export function openHfCatalog({ onBack }) {
   const host = document.getElementById('modalHost');
   const page = document.createElement('div');
@@ -371,33 +396,49 @@ export function openHfCatalog({ onBack }) {
         <label class="hf-search">${icon('search', 16)}
           <input type="search" maxlength="160" data-i18n-aria="hf.search" data-i18n-placeholder="hf.search">
         </label>
+        <div class="hf-filters">
+          <select class="hf-format" data-i18n-aria="hf.format">
+            <option value="gguf">GGUF</option>
+            <option value="safetensors">Safetensors</option>
+            <option value="pytorch">PyTorch</option>
+          </select>
+          <select class="hf-sort" data-i18n-aria="hf.sort">
+            <option value="trendingScore" data-i18n="hf.sortTrending"></option>
+            <option value="downloads" data-i18n="hf.sortDownloads"></option>
+            <option value="likes" data-i18n="hf.sortLikes"></option>
+            <option value="createdAt" data-i18n="hf.sortCreated"></option>
+            <option value="lastModified" data-i18n="hf.sortUpdated"></option>
+            <option value="id" data-i18n="hf.sortName"></option>
+          </select>
+        </div>
         <h3 data-i18n="hf.trending"></h3>
       </div>
       <div class="hf-scroll">
         <p class="hf-status" role="status"></p>
         <ul class="hf-list"></ul>
         <div class="hf-download-controls" hidden>
-          <button class="btn" type="button" data-expand hidden></button>
           <span data-selected></span>
           <button class="btn" type="button" data-download>${icon('download', 16)} <span data-i18n="hf.downloadSelected"></span></button>
         </div>
         <ul class="hf-results" aria-live="polite"></ul>
+        <a class="btn hf-repo" hidden data-i18n="hf.repository"></a>
         <section class="hf-readme" hidden>
           <h4 data-i18n="hf.description"></h4>
           <div class="md"></div>
         </section>
-        <a class="hf-repo" hidden data-i18n="hf.repository"></a>
       </div>
     </section>`;
   const back = page.querySelector('[data-back]');
   const intro = page.querySelector('[data-intro]');
   const search = page.querySelector('input');
+  const format = page.querySelector('.hf-format');
+  const sort = page.querySelector('.hf-sort');
+  const filters = page.querySelector('.hf-filters');
   const heading = page.querySelector('h3');
   const status = page.querySelector('.hf-status');
   const scroll = page.querySelector('.hf-scroll');
   const list = page.querySelector('.hf-list');
   const controls = page.querySelector('.hf-download-controls');
-  const expand = page.querySelector('[data-expand]');
   const downloadButton = page.querySelector('[data-download]');
   const countLabel = page.querySelector('[data-selected]');
   const readme = page.querySelector('.hf-readme');
@@ -430,36 +471,25 @@ export function openHfCatalog({ onBack }) {
     }
   }
 
-  function row(name, description, action) {
-    const item = document.createElement('li');
-    const info = document.createElement('div');
-    const title = document.createElement('strong');
-    title.textContent = name;
-    info.append(title, description);
-    if (action.matches('input[type="checkbox"]')) {
-      const label = document.createElement('label');
-      label.className = 'hf-variant-choice';
-      label.append(info, action);
-      item.classList.add('hf-variant-row');
-      item.append(label);
-    } else item.append(info, action);
-    list.append(item);
-  }
-
   function showModels(restoreFocus = false) {
-    label(heading, search.value.trim() ? 'hf.searchResults' : 'hf.trending');
+    label(heading, search.value.trim() ? 'hf.searchResults'
+      : sort.value === 'trendingScore' ? 'hf.trending' : sort.selectedOptions[0].dataset.i18n);
     list.replaceChildren();
     let previousButton;
     for (const model of models) {
       const author = document.createElement('small');
       author.textContent = model.author;
       const button = document.createElement('button');
-      button.className = 'btn';
+      button.className = 'hf-model-open';
       button.type = 'button';
-      button.innerHTML = `${icon('file', 16)} <span></span>`;
-      label(button.querySelector('span'), 'hf.viewModel');
+      const title = document.createElement('strong');
+      title.textContent = model.name;
+      button.append(title, author);
       button.addEventListener('click', () => showDetail(model));
-      row(model.name, author, button);
+      const item = document.createElement('li');
+      item.className = 'hf-model-row';
+      item.append(button);
+      list.append(item);
       if (model.id === catalogFocus) previousButton = button;
     }
     if (restoreFocus) {
@@ -477,7 +507,7 @@ export function openHfCatalog({ onBack }) {
     scroll.scrollTop = 0;
     showStatus('hf.loading');
     searchTimer = setTimeout(async () => {
-      const response = await request(query ? 'hf-search' : 'hf-trending', { query });
+      const response = await request(query ? 'hf-search' : 'hf-trending', { query, format: format.value, sort: sort.value });
       if (!page.isConnected || detail || version !== searchVersion) return;
       models = response.ok ? response.result : [];
       showModels();
@@ -490,17 +520,17 @@ export function openHfCatalog({ onBack }) {
     const selected = detail.variants.filter((variant) => detail.selected.has(variant.name));
     const known = selected.length > 0 && selected.every((variant) => variant.size != null);
     const vars = { count: selected.length, size: known ? formatBytes(selected.reduce((sum, variant) => sum + variant.size, 0)) : '' };
+    countLabel.hidden = !!detail.gated;
+    downloadButton.hidden = !!detail.gated;
     label(countLabel, known ? 'hf.selectedSize' : 'hf.selectedCount', vars);
     downloadButton.disabled = !!activeTransfer || !!pausedTransfer || downloading || !selected.length;
   }
 
   function renderVariants() {
     list.replaceChildren();
-    expand.hidden = detail.variants.length <= 3;
-    label(expand, detail.expanded ? 'hf.showPreview' : 'hf.allFiles');
-    expand.setAttribute('aria-expanded', String(detail.expanded));
     controls.hidden = !detail.variants.length;
-    for (const variant of detail.expanded ? detail.variants : detail.variants.slice(0, 3)) {
+    const groups = new Map();
+    for (const variant of detail.variants) {
       const meta = document.createElement('small');
       if (variant.projector) {
         const badge = document.createElement('span');
@@ -520,13 +550,39 @@ export function openHfCatalog({ onBack }) {
       checkbox.type = 'checkbox';
       checkbox.setAttribute('aria-label', variant.name);
       checkbox.checked = detail.selected.has(variant.name);
-      checkbox.disabled = downloading;
+      checkbox.disabled = downloading || detail.gated;
       checkbox.addEventListener('change', () => {
         if (checkbox.checked) detail.selected.add(variant.name);
         else detail.selected.delete(variant.name);
         updateSelection();
       });
-      row(variant.name, meta, checkbox);
+      const { group, name } = weightVariant(variant);
+      if (!groups.has(group)) groups.set(group, []);
+      const chip = document.createElement('label');
+      chip.className = 'hf-quant-chip';
+      chip.title = variant.name;
+      chip.append(checkbox);
+      if (/(?:^|[-_/])MTP(?:[-_/.]|$)/i.test(variant.name)) {
+        const mtp = document.createElement('span');
+        mtp.className = 'hf-quant-mtp';
+        mtp.textContent = 'MTP';
+        chip.append(mtp);
+      }
+      chip.append(name, meta);
+      groups.get(group).push(chip);
+    }
+    const order = (key) => typeof key === 'number' ? key : 100;
+    for (const [group, chips] of [...groups].sort(([a], [b]) => order(a) - order(b))) {
+      const line = document.createElement('li');
+      line.className = 'hf-quant-row';
+      const title = document.createElement('span');
+      if (typeof group === 'number') label(title, 'hf.bits', { count: group });
+      else if (group === 'projector') label(title, 'hf.projector');
+      else title.textContent = group.toUpperCase();
+      const options = document.createElement('div');
+      options.append(...chips);
+      line.append(title, options);
+      list.append(line);
     }
     updateSelection();
   }
@@ -534,10 +590,10 @@ export function openHfCatalog({ onBack }) {
   async function showDetail(model) {
     catalogPosition = scroll.scrollTop;
     catalogFocus = model.id;
-    const current = { model, variants: [], selected: new Set(), expanded: false };
+    const current = { model, variants: [], selected: new Set() };
     detail = current;
     intro.hidden = true;
-    search.closest('label').hidden = true;
+    filters.hidden = search.closest('label').hidden = true;
     delete heading.dataset.i18n;
     heading.textContent = model.id;
     label(back, 'hf.backCatalog');
@@ -555,7 +611,8 @@ export function openHfCatalog({ onBack }) {
     if (!response.ok) { showStatus(errorKey[response.code] || 'hf.network'); return; }
     current.variants = response.result.variants;
     current.revision = response.result.revision;
-    showStatus(current.variants.length ? null : 'hf.emptyVariants');
+    current.gated = response.result.gated;
+    showStatus(current.gated ? 'hf.gated' : current.variants.length ? null : 'hf.emptyVariants');
     renderVariants();
 
     const description = await request('hf-readme', { repo: model.id, revision: current.revision });
@@ -570,13 +627,12 @@ export function openHfCatalog({ onBack }) {
 
   function setDownloading(value) {
     downloading = value;
-    expand.disabled = value;
     list.querySelectorAll('input').forEach((input) => { input.disabled = value; });
     updateSelection();
   }
 
   async function downloadSelected() {
-    if (activeTransfer || pausedTransfer || downloading || !detail?.selected.size) return;
+    if (activeTransfer || pausedTransfer || downloading || detail?.gated || !detail?.selected.size) return;
     const current = detail;
     const transfer = { model: current.model.id, stopping: false };
     activeTransfer = transfer;
@@ -613,10 +669,8 @@ export function openHfCatalog({ onBack }) {
 
   page.addEventListener('hf-transfer-ended', () => { if (detail) updateSelection(); });
   search.addEventListener('input', searchCatalog);
-  expand.addEventListener('click', () => {
-    detail.expanded = !detail.expanded;
-    renderVariants();
-  });
+  format.addEventListener('change', searchCatalog);
+  sort.addEventListener('change', searchCatalog);
   downloadButton.addEventListener('click', downloadSelected);
   page.addEventListener('click', async (event) => {
     const link = event.target.closest('a[href]');
@@ -631,7 +685,7 @@ export function openHfCatalog({ onBack }) {
     controls.hidden = readme.hidden = repoLink.hidden = true;
     results.replaceChildren();
     readme.querySelector('.md').replaceChildren();
-    intro.hidden = search.closest('label').hidden = false;
+    intro.hidden = filters.hidden = search.closest('label').hidden = false;
     label(back, 'hf.back');
     showStatus(null);
     showModels(true);
