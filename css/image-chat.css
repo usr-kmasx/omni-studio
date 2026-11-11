@@ -11,9 +11,14 @@
   justify-items: start;
   min-width: 0;
 }
-.generated-image-result img {
-  display: block;
+.generated-image-frame {
+  position: relative;
   max-width: min(100%, 32rem);
+  min-width: 0;
+}
+.generated-image-frame img {
+  display: block;
+  max-width: 100%;
   max-height: 65vh;
   width: auto;
   height: auto;
@@ -21,7 +26,59 @@
   object-fit: contain;
   cursor: zoom-in;
 }
-.generated-image-result progress { max-width: 100%; }
+.generated-image-frame .generated-image-save {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  width: 32px;
+  height: 32px;
+  background: var(--surface);
+  border-color: var(--border);
+  color: var(--text);
+}
+.generated-image-frame .generated-image-save:hover { background: var(--surface-3); }
+.image-generation-scene {
+  position: relative;
+  width: min(100%, 32rem);
+  aspect-ratio: 4 / 3;
+  overflow: hidden;
+  container-type: size;
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+  background: var(--surface);
+}
+.image-generation-drop {
+  position: absolute;
+  top: -12%;
+  left: var(--x);
+  width: 2px;
+  height: 11%;
+  border-radius: 2px;
+  background: var(--text-dim);
+  opacity: 0.65;
+  animation: image-generation-rain var(--duration) linear var(--delay) infinite;
+}
+@keyframes image-generation-rain {
+  to { transform: translate(12px, 112cqh); }
+}
+.image-generation-meter {
+  position: absolute;
+  right: 12px;
+  bottom: 12px;
+  display: grid;
+  place-items: center;
+  width: 3rem;
+  aspect-ratio: 1;
+  border: 1px solid var(--text-dim);
+  border-radius: 50%;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+}
+@media (prefers-reduced-motion: reduce) {
+  .image-generation-drop { animation-play-state: paused; }
+}
 .image-settings .image-generation-options {
   display: grid;
   gap: 0.75rem;

@@ -4,7 +4,7 @@ Aplicativo de desktop para conversar com modelos locais por texto, imagem, áudi
 
 ## Edição completa para Linux x86-64
 
-Extraia a pasta inteira do pacote de distribuição e execute `./launch.sh`. O sistema precisa de glibc compatível com o binário, GTK 4.10 ou superior e WebKitGTK 6.0. Instale também `ffmpeg` e `ffprobe` para enviar vídeos. A edição usa CPU no primeiro perfil. Para aceleração em uma máquina com Vulkan, ajuste as camadas na GPU em **Configurações → llama.cpp → Local**.
+Extraia a pasta inteira do pacote e execute `./install.sh`. O instalador verifica os arquivos, instala para o usuário e cria um atalho com a logo no menu de aplicativos. Para escolher outro destino, use `./install.sh --prefix DIRETORIO`. Para uso portátil, execute `./launch.sh`. O sistema precisa de glibc compatível com o binário, GTK 4.10 ou superior e WebKitGTK 6.0. Instale também `ffmpeg` e `ffprobe` para enviar vídeos. A edição usa CPU no primeiro perfil. Para aceleração em uma máquina com Vulkan, ajuste as camadas na GPU em **Configurações → llama.cpp → Local**.
 
 O pacote já contém os componentes necessários para iniciar o modelo sem baixar arquivos. Um servidor externo compatível, quando disponível, tem prioridade. Quem já usa o Omni Studio pode selecionar **Usar LFM3-Omni incluído** e salvar, ou continuar usando o modelo configurado. Mantenha a pasta inteira ao mover o app.
 
@@ -15,6 +15,8 @@ Use `tools/package-linux-complete.sh DIRETORIO_DE_INSUMOS BINARIO_RELEASE SAIDA.
 - `LFM3-Omni-2B-Q4_K_M.gguf`, `mmproj-LFM3-Omni-2B-Q4_K_M.gguf` e o `LICENSE` salvo como `LICENSE-LFM` da [revisão oficial fixada da Liquid AI](https://huggingface.co/LiquidAI/LFM3-Omni-2B-GGUF/tree/d508b88f08a5b4286f2d2805a6a8d69a0ff44c72).
 - `llama-b12202-bin-ubuntu-vulkan-x64.tar.gz` da [release b12202 do llama.cpp](https://github.com/ggml-org/llama.cpp/releases/tag/b12202).
 
+Inclua também `omni-image-runtimes/cpu/` e `omni-image-runtimes/vulkan/`, cada um com `sd-server.zip` e `sd-server.zip.sha256` produzidos por `tools/sd-runtime/build.sh`, e os avisos de licença desses componentes em `licenses/*.txt`.
+
 O script verifica os quatro SHA-256 e o limite de tamanho do GitHub Releases. O código do Omni Studio é MIT. Os pesos da Liquid AI são distribuídos sob a [LFM Open License v1.0](https://huggingface.co/LiquidAI/LFM3-Omni-2B-GGUF/blob/d508b88f08a5b4286f2d2805a6a8d69a0ff44c72/LICENSE).
 
 ## Geração local de imagens
@@ -23,7 +25,7 @@ No aplicativo desktop, abra **Configurações → stable-diffusion.cpp**. Escolh
 
 Para modelos com pesos separados, escolha **Componentes separados** e indique a difusão, o codificador de texto e o VAE. Quando o modelo pedir uma sequência de ruído específica, informe os sigmas em **Avançado**. Em Vulkan, esse modo permite usar RAM para aliviar a VRAM.
 
-Na aba **Imagem**, escreva o prompt, escolha a resolução e clique em **Gerar**. A primeira geração carrega o modelo local. O modelo continua carregado ao cancelar, gerar novamente ou voltar ao Chat. Use **Parar backend** para liberar a memória.
+Ative o modo **Imagem** ao lado do botão de anexos no Chat e envie o prompt. Configure resolução, steps e os demais parâmetros em **Configurações → stable-diffusion.cpp**. A primeira geração carrega o modelo local. O modelo continua carregado ao cancelar, gerar novamente ou voltar ao Chat. Use **Parar backend** para liberar a memória.
 
 ## 1. Como executar a interface web de desenvolvimento
 
@@ -60,10 +62,10 @@ chmod +x run.sh
 | Vídeo (com trilha sonora) | Blocos `input_video` (base64). Quando há vídeo na mensagem, a interface injeta automaticamente a instrução oficial da Liquid AI: *"Answer questions about the video using what you see and hear."* — o modelo recebe os frames **e** a trilha sonora. |
 | Perguntar sobre imagem com voz | Anexe a imagem e grave a pergunta com o microfone — os dois vão juntos na mesma mensagem. |
 | Respostas faladas (TTS) | Botão "ouvir" em cada resposta (ou automático, opcional): `POST /tts` com `voice` (female/male) e `lang`. Geração **idempotente** (no máximo um áudio por resposta), chamadas **serializadas**, retry com backoff para falha de rede **e** HTTP 503 (slot ocupado do llama.cpp), e validação de WAV vazio. Falhas exibem mensagem real (rede × HTTP × timeout) com diagnóstico técnico no console. |
-| Conversa por voz em tempo real | Aba **Voz**: WebSocket `/v1/realtime` (protocolo OpenAI Realtime implementado pelo llama.cpp) com **escuta contínua**: o microfone fica ativo, a detecção de fala (VAD) segmenta seus turnos automaticamente e o modelo responde com texto + fala em streaming (PCM16 24 kHz). A sessão permanece aberta até você encerrá-la; o texto aparece numa **única bolha** atualizada progressivamente. A reprodução ao vivo usa player PCM **sem nenhuma barra/player visual** abaixo da conversa. Interrupção pelo botão "Parar" (barra superior). |
+| Conversa por voz em tempo real | Botão **Live** no compositor do Chat: WebSocket `/v1/realtime` (protocolo OpenAI Realtime implementado pelo llama.cpp) com **escuta contínua**: o microfone fica ativo, a detecção de fala (VAD) segmenta seus turnos automaticamente e o modelo responde com texto + fala em streaming (PCM16 24 kHz). A sessão permanece aberta até você encerrá-la; o texto aparece numa **única bolha** atualizada progressivamente. A reprodução ao vivo usa player PCM **sem nenhuma barra/player visual** abaixo da conversa. Interrupção pelo botão "Parar" (barra superior). |
 | Interromper geração | Texto: aborta o `fetch` (o servidor libera o slot ao desconectar). Voz: evento `response.cancel` ou botão "Parar". |
-| Verificação de conexão | `GET /health`, `GET /v1/models` (detecta `input_modalities`/`output_modalities` reais) e `GET /props` (contexto, vozes), com indicador no topo. |
-| Configuração do endereço | Modal de configurações (URL do servidor, voz, idioma TTS/ASR, máx. tokens, fala automática). |
+| Verificação de conexão | `GET /health`, `GET /v1/models` (detecta `input_modalities`/`output_modalities` reais) e `GET /props` (contexto, vozes), com estado no painel do llama.cpp. |
+| Configuração do endereço | Painel llama.cpp para endereço e parâmetros do servidor. Configurações gerais para tema, idioma, voz e fala automática. |
 
 ---
 

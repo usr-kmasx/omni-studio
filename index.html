@@ -4,7 +4,19 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Omni Studio</title>
-  <link rel="icon" href="assets/studio.omni.app.svg">
+  <script>
+    (() => {
+      let savedTheme;
+      try { savedTheme = JSON.parse(localStorage.getItem('lfm3-omni-ui-settings'))?.theme; } catch {}
+      const preference = window.__omniInitialTheme || savedTheme || 'system';
+      const theme = preference === 'system'
+        ? (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
+        : preference;
+      document.documentElement.dataset.theme = theme;
+      document.documentElement.style.colorScheme = theme === 'light' ? 'light' : 'dark';
+    })();
+  </script>
+  <link rel="icon" href="assets/studio.omni.app.png">
   <link rel="stylesheet" href="css/style.css">
   <link rel="stylesheet" href="css/omni-redesign.css">
   <link rel="stylesheet" href="css/omni-panels.css">

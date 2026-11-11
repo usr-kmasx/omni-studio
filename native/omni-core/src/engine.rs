@@ -455,6 +455,12 @@ pub fn backend_serve_args(
     if let Some(mm) = mmproj {
         push_opt(&mut args, "-mm", &mm.display().to_string());
     }
+    if params.mtp {
+        push_opt(&mut args, "--spec-type", "draft-mtp");
+        if let Some(path) = &params.mtp_draft {
+            push_opt(&mut args, "--spec-draft-model", path);
+        }
+    }
     push_opt(&mut args, "-c", &params.ctx_size.to_string());
     push_opt(&mut args, "-ngl", &params.ngl);
     push_opt(&mut args, "-ctk", &params.cache_type_k);
@@ -606,6 +612,21 @@ mod tests {
     use super::*;
 
     fn noop(_: &DownloadProgress) {}
+
+    #[test]
+    fn passes_mtp_flags_only_when_enabled() {
+        let mut params = IntegratedParams {
+            mtp_draft: Some("/m/draft.gguf".into()),
+            ..IntegratedParams::default()
+        };
+        let args = |params: &IntegratedParams| backend_serve_args(Path::new("/m/model.gguf"), None, 8080, params, "");
+        assert!(!args(&params).iter().any(|arg| arg.starts_with("--spec-")));
+        params.mtp = true;
+        assert!(args(&params).windows(2).any(|w| w == ["--spec-type", "draft-mtp"]));
+        assert!(args(&params).windows(2).any(|w| w == ["--spec-draft-model", "/m/draft.gguf"]));
+        params.mtp_draft = None;
+        assert!(!args(&params).iter().any(|arg| arg == "--spec-draft-model"));
+    }
 
     #[test]
     fn backend_serve_args_modernos() {

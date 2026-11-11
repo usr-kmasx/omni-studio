@@ -142,15 +142,18 @@ export function openHistory({ onOpen, onDelete, onError, onNew, trigger, host, k
     trigger.setAttribute('aria-expanded', 'false');
     if (restoreFocus) trigger.focus();
   };
-  const scheduleClose = () => {
+  const scheduleClose = ({ type } = {}) => {
+    const leavingPanel = type === 'pointerleave';
     clearClose();
     closeTimer = setTimeout(() => {
-      if (!trigger.matches(':hover, :focus-within') && !overlay.matches(':hover, :focus-within')) close();
+      if (trigger.matches(':hover') || overlay.matches(':hover')) return;
+      if (!leavingPanel && (trigger.matches(':focus-within') || overlay.matches(':focus-within'))) return;
+      close();
     }, 140);
   };
   for (const element of [trigger, overlay]) {
     element.addEventListener('pointerenter', clearClose, { signal });
-    element.addEventListener('pointerleave', scheduleClose, { signal });
+    element.addEventListener('pointerleave', (event) => scheduleClose(element === overlay ? event : undefined), { signal });
     element.addEventListener('focusin', clearClose, { signal });
     element.addEventListener('focusout', scheduleClose, { signal });
   }

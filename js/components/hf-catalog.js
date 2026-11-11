@@ -8,7 +8,7 @@ function request(cmd, fields = {}, onProgress) {
   if (!bridge) return Promise.resolve({ ok: false, code: 'native' });
   return new Promise((resolve) => {
     const requestId = newRequestId();
-    const timeout = ['hf-download', 'hf-resume-download'].includes(cmd) ? null : setTimeout(() => finish({ ok: false, code: 'network' }), 65000);
+    const timeout = ['hf-download', 'hf-resume-download', 'hf-choose-folder'].includes(cmd) ? null : setTimeout(() => finish({ ok: false, code: 'network' }), 65000);
     function finish(result) {
       clearTimeout(timeout);
       window.removeEventListener('omni-backend-command-result', receive);
@@ -31,10 +31,58 @@ const errorKey = {
   variant: 'hf.variantMissing', download: 'hf.downloadError', paused: 'hf.pausedExists',
 };
 
+const downloadQueue = [];
 let activeTransfer = null;
 let pausedTransfer = null;
 let pauseExpiryTimer;
 let transferPanel;
+
+let lastPopupState;
+const popupActions = ['pause', 'skip-verification', 'stop'];
+
+function syncDownloadPopup() {
+  const panel = transferPanel?.hidden ? null : transferPanel;
+  const read = (selector) => {
+    const element = panel?.querySelector(selector);
+    return element && !element.hidden ? element.textContent.trim() : '';
+  };
+  const queued = downloadQueue.map(({ repo, variant }) => `${repo} — ${variant}`);
+  const text = [
+    panel?.querySelector('.hf-transfer-title')?.title,
+    read('[role="status"]'), read('[data-transfer-stats]'), read('[data-transfer-eta]'),
+    ...queued,
+  ].filter(Boolean).join('\n') || ({
+    en: 'No downloads', pt: 'Nenhum download', es: 'No hay descargas',
+    fr: 'Aucun téléchargement', de: 'Keine Downloads',
+  }[getLocale()] || 'No downloads');
+  const actions = Object.fromEntries(popupActions.flatMap(key => {
+    const button = panel?.querySelector(`[data-${key}]`);
+    return button && !button.hidden ? [[key, { label: button.textContent, disabled: button.disabled }]] : [];
+  }));
+  const state = JSON.stringify({ text, actions });
+  if (state === lastPopupState) return;
+  lastPopupState = state;
+  void request('hf-popup-state', { text, actions });
+}
+
+window.addEventListener('omni-hf-download-popup', () => {
+  lastPopupState = null;
+  syncDownloadPopup();
+});
+window.addEventListener('omni-hf-download-action', ({ detail }) => {
+  if (popupActions.includes(detail)) transferPanel?.querySelector(`[data-${detail}]`)?.click();
+});
+
+function renderDownloadQueue() {
+  const list = transferPanel?.querySelector('[data-transfer-queue]');
+  if (!list) return;
+  list.hidden = downloadQueue.length === 0;
+  list.replaceChildren(...downloadQueue.map(({ repo, variant }) => {
+    const item = document.createElement('li');
+    item.textContent = `${repo} — ${variant}`;
+    return item;
+  }));
+}
 
 function showTransfer(transfer, key, vars = {}) {
   if (!transferPanel) {
@@ -47,10 +95,12 @@ function showTransfer(transfer, key, vars = {}) {
       <progress data-i18n-aria="hf.downloading"></progress>
       <small data-transfer-stats></small>
       <small data-transfer-eta></small>
+      <ul data-transfer-queue hidden></ul>
       <details data-transfer-results hidden><summary data-i18n="hf.transferResults"></summary><ul></ul></details>
       <div class="hf-transfer-buttons"><button class="btn" type="button" data-pause></button>
       <button class="btn" type="button" data-skip-verification hidden data-i18n="hf.skipVerification"></button>
       <button class="btn" type="button" data-stop></button></div></div>`;
+    renderDownloadQueue();
     const host = document.getElementById('modalHost');
     const placePanel = () => (host.querySelector('.modal') || document.body).append(transferPanel);
     new MutationObserver(placePanel).observe(host, { childList: true });
@@ -58,7 +108,7 @@ function showTransfer(transfer, key, vars = {}) {
     const toggle = transferPanel.querySelector('.hf-transfer-toggle');
     const body = transferPanel.querySelector('.hf-transfer-body');
     const logo = document.createElement('img');
-    logo.src = new URL('../../assets/studio.omni.app.svg', import.meta.url).href;
+    logo.src = new URL('../../assets/omni-download-logo.png', import.meta.url).href;
     logo.alt = '';
     toggle.append(logo);
     toggle.setAttribute('aria-controls', body.id);
@@ -100,6 +150,7 @@ function showTransfer(transfer, key, vars = {}) {
           const status = await request('hf-download-status');
           if (status.ok && status.result && !activeTransfer) showPaused(status.result, 'hf.resumeError');
         }
+        void startNextDownload();
         return;
       }
       const job = activeTransfer;
@@ -132,11 +183,12 @@ function showTransfer(transfer, key, vars = {}) {
           pausedTransfer = null;
           clearTimeout(pauseExpiryTimer);
           showTransfer(job, 'hf.discardedPause');
+          void startNextDownload();
           } else showTransfer(job, 'hf.cancelDownloadError');
         return;
       }
       const job = activeTransfer;
-      if (!job) { transferPanel.hidden = true; return; }
+      if (!job) { transferPanel.hidden = true; syncDownloadPopup(); return; }
       if (job.stopping) return;
       job.stopping = true;
       showTransfer(job, 'hf.stoppingDownload');
@@ -217,6 +269,7 @@ function showTransfer(transfer, key, vars = {}) {
   button.disabled = activeTransfer === transfer && transfer.stopping;
   button.dataset.i18n = activeTransfer === transfer || pausedTransfer === transfer ? 'hf.stopDownload' : 'settings.close';
   button.textContent = t(button.dataset.i18n);
+  syncDownloadPopup();
 }
 
 
@@ -238,6 +291,7 @@ export async function restoreHfDownload() {
     const expired = pausedTransfer;
     pausedTransfer = null;
     showTransfer(expired, 'hf.pauseExpired');
+    void startNextDownload();
   }
 }
 
@@ -280,18 +334,37 @@ const browserLabels = {
 };
 
 async function downloadSiteSelection(selection) {
-  if (!selection || activeTransfer || pausedTransfer) return;
+  if (!selection) return;
   const { repo, revision, variant } = selection;
   if ([repo, revision, variant].some(value => typeof value !== 'string' || !value)) return;
-  const transfer = { model: repo, stopping: false };
-  activeTransfer = transfer;
-  const response = await request('hf-download', {
-    repo, revision, variants: [variant],
+  if (downloadQueue.some(item => item.repo === repo && item.revision === revision && item.variant === variant)) return;
+  const choice = await request('hf-choose-folder', {
     folderTitle: t('hf.chooseFolder'),
     acceptLabel: t('hf.download'),
     cancelLabel: t('settings.cancel'),
+  });
+  if (choice.cancelled) return;
+  if (!choice.ok || !choice.folder) {
+    if (!activeTransfer && !pausedTransfer) showTransfer({ model: repo }, errorKey[choice.code] || 'hf.folderError');
+    return;
+  }
+  downloadQueue.push({ repo, revision, variant, folder: choice.folder });
+  renderDownloadQueue();
+  syncDownloadPopup();
+  await startNextDownload();
+}
+
+async function startNextDownload() {
+  if (activeTransfer || pausedTransfer || !downloadQueue.length) return;
+  const { repo, revision, variant, folder } = downloadQueue.shift();
+  renderDownloadQueue();
+  const transfer = { model: repo, stopping: false };
+  activeTransfer = transfer;
+  const response = await request('hf-download', {
+    repo, revision, variants: [variant], folder,
   }, sample => updateTransfer(transfer, sample));
   finishTransfer(transfer, response);
+  void startNextDownload();
 }
 
 window.addEventListener('omni-hf-site-download', ({ detail }) => {

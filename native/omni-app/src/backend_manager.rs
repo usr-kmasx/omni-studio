@@ -674,6 +674,8 @@ impl BackendManager {
             "paramsSlots": p.slots,
             "paramsFa": p.flash_attn,
             "paramsReasoning": p.reasoning,
+            "paramsMtp": p.mtp,
+            "paramsMtpDraft": p.mtp_draft,
             "paramsHost": p.host,
             "paramsPort": p.port,
             "paramsCors": p.cors_origins,

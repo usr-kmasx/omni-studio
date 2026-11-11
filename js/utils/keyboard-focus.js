@@ -1,6 +1,6 @@
 const focusable = [
   'button', 'input:not([type="hidden"])', 'select', 'textarea', 'a[href]',
-  'summary', 'audio[controls]', 'video[controls]', '[tabindex]', '[contenteditable="true"]',
+  'summary', 'iframe', 'audio[controls]', 'video[controls]', '[tabindex]', '[contenteditable="true"]',
 ].join(',');
 
 function tabStops(root) {

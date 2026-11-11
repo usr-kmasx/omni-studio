@@ -2,11 +2,14 @@
 // Componente de conversa: balões, anexos, players, markdown.
 // ============================================================
 
+import { openHtmlPreview } from './html-preview.js';
 import { renderMarkdown } from '../utils/md.js';
+import { updateMarkdownDom } from '../utils/markdown-dom.js';
 import { icon } from '../utils/icons.js';
 import { appToast } from '../utils/toast.js';
 import { formatBytes } from './media.js';
 import { t } from '../i18n.js';
+import { codeLabel } from '../utils/code-labels.js';
 
 // ---- utilitários de DOM ----
 
@@ -308,7 +311,7 @@ export function createAssistantBubble(msg, { onSpeak, onSpeechReady }) {
     const rendered = renderMarkdown(text);
     if (rendered !== lastRendered) {
       lastRendered = rendered;
-      contentHost.innerHTML = rendered;
+      updateMarkdownDom(contentHost, rendered);
     }
   };
 
@@ -408,6 +411,19 @@ export function createAssistantBubble(msg, { onSpeak, onSpeechReady }) {
   };
 
   const controller = {
+    setHtmlCorrection(on) {
+      const label = thinking.querySelector('span');
+      if (on) {
+        delete label.dataset.i18n;
+        label.textContent = codeLabel('correcting');
+        thinking.classList.remove('hidden');
+      } else {
+        label.dataset.i18n = 'chat.processingPrompt';
+        label.textContent = t('chat.processingPrompt');
+        this.setThinking(false);
+      }
+    },
+
     setThinking(on) {
       thinking.classList.toggle('hidden', !on || !reasoning.classList.contains('hidden'));
     },
@@ -530,13 +546,18 @@ export function createAssistantBubble(msg, { onSpeak, onSpeechReady }) {
 
 export function attachChatDelegation(listEl) {
   listEl.addEventListener('click', (e) => {
+    const preview = e.target.closest('.md-preview');
+    if (preview) {
+      const code = preview.closest('.md-code')?.querySelector('code');
+      if (code) openHtmlPreview(code.textContent, preview);
+      return;
+    }
     const copyBtn = e.target.closest('.md-copy');
     if (copyBtn) {
       const codeEl = copyBtn.closest('.md-code')?.querySelector('code');
       if (codeEl) {
-        navigator.clipboard?.writeText(codeEl.innerText).then(() => {
+        navigator.clipboard?.writeText(codeEl.textContent).then(() => {
           const prev = copyBtn.textContent;
-          copyBtn.dataset.i18n = 'chat.copied';
           copyBtn.dataset.i18n = 'chat.copied';
           copyBtn.textContent = t('chat.copied');
           setTimeout(() => { copyBtn.textContent = prev; delete copyBtn.dataset.i18n; }, 1400);

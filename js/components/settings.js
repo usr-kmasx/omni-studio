@@ -114,24 +114,57 @@ export function openSettings({ onSaved, focusBackend = false, focusCatalog = fal
   if (fromHover) panel.dataset.passiveFocus = '';
   host.appendChild(modal);
 
-  const close = () => { modal.remove(); };
+  const close = () => {
+    document.removeEventListener('pointermove', onSelectPointerMove);
+    modal.remove();
+  };
   let dismissTimer;
-  function scheduleDismiss() {
+  let openSelect = null;
+  const finishSelect = () => { openSelect = null; };
+  const onSelectPointerMove = (event) => {
+    if (!modal.isConnected) {
+      document.removeEventListener('pointermove', onSelectPointerMove);
+      return;
+    }
+    if (openSelect && panel.contains(event.target) &&
+        !event.target.closest('select, option')) finishSelect();
+  };
+  document.addEventListener('pointermove', onSelectPointerMove);
+  for (const select of panel.querySelectorAll('select')) {
+    select.addEventListener('pointerdown', () => { openSelect = select; });
+    select.addEventListener('keydown', (event) => {
+      if (['ArrowDown', 'ArrowUp', ' ', 'Enter'].includes(event.key)) openSelect = select;
+    });
+    select.addEventListener('blur', (event) => {
+      if (event.relatedTarget && panel.contains(event.relatedTarget)) finishSelect();
+    });
+  }
+  function scheduleDismiss({ type } = {}) {
     if (!trigger || !modal.isConnected) return;
     clearTimeout(dismissTimer);
     dismissTimer = setTimeout(() => {
-      if (!trigger.matches(':hover') && !panel.matches(':hover, :focus-within')) close();
+      if (openSelect || trigger.matches(':hover') || panel.matches(':hover')) return;
+      if (type !== 'pointerleave' && panel.matches(':focus-within')) return;
+      close();
     }, 180);
   }
   panel.addEventListener('pointerleave', scheduleDismiss);
   panel.addEventListener('focusout', scheduleDismiss);
 
   modal.addEventListener('click', (e) => {
-    if (e.target === modal) close();
+    if (e.target === modal && !openSelect) close();
   });
   modal.querySelector('[data-cancel]').addEventListener('click', close);
 
-  const esc = (e) => { if (e.key === 'Escape') close(); };
+  const esc = (e) => {
+    if (e.key !== 'Escape') return;
+    if (openSelect) {
+      finishSelect();
+      e.stopPropagation();
+      return;
+    }
+    close();
+  };
   modal.addEventListener('keydown', esc);
 
   modal.querySelector('[data-save]').addEventListener('click', async (event) => {

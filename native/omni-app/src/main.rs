@@ -171,6 +171,13 @@ fn apply_integrated_changes(s: &mut omni_core::settings::Settings, changes: &ser
         set_opt_path(&mut p.mmproj, &mut s.model_mmproj, v);
     }
 
+    if let Some(value) = changes.get("mtp").and_then(|value| value.as_bool()) {
+        p.mtp = value;
+    }
+    if let Some(value) = changes.get("mtp_draft") {
+        p.mtp_draft = value.as_str().filter(|path| !path.is_empty()).map(str::to_owned);
+    }
+
     let set_str = |target: &mut String, key: &str, fallback: &str| {
         if let Some(v) = changes.get(key) {
             if let Some(x) = v.as_str() {
@@ -337,11 +344,22 @@ fn build_ui(app: &gtk4::Application) {
     settings.set_javascript_can_open_windows_automatically(false);
 
     let user_content = webkit6::UserContentManager::new();
+    let initial_theme = ui_settings::read(&omni_core::paths::config_dir().join("ui-settings.json"))
+        .ok().and_then(|value| value["theme"].as_str().map(str::to_owned));
+    let bootstrap = format!("window.__omniInitialTheme = {};",
+        serde_json::to_string(&initial_theme).unwrap_or_else(|_| "null".into()));
+    user_content.add_script(&webkit6::UserScript::new(
+        &bootstrap, webkit6::UserContentInjectedFrames::TopFrame,
+        webkit6::UserScriptInjectionTime::Start, &[], &[],
+    ));
+
     let view = webkit6::WebView::builder()
         .web_context(&ctx)
         .settings(&settings)
         .user_content_manager(&user_content)
         .build();
+    view.connect_context_menu(|_, _, _| true);
+    view.set_background_color(&gtk4::gdk::RGBA::new(32.0 / 255.0, 32.0 / 255.0, 33.0 / 255.0, 1.0));
 
     // ---------- Gerenciador de backends + ponte JS ↔ Rust ----------
     let manager = Arc::new(BackendManager::with_bundle(&server.base_url, bundle));
@@ -458,7 +476,7 @@ fn build_ui(app: &gtk4::Application) {
                         });
                     }
                 }
-                "hf-open-site" | "hf-download" | "hf-cancel-download" | "hf-skip-verification" | "hf-pause-download" | "hf-resume-download" | "hf-download-status" => {
+                "hf-open-site" | "hf-popup-state" | "hf-choose-folder" | "hf-download" | "hf-cancel-download" | "hf-skip-verification" | "hf-pause-download" | "hf-resume-download" | "hf-download-status" => {
                     if let Ok(request) = &parsed {
                         catalog.handle(&cmd, request, &view, window_holder.borrow().clone());
                     }
@@ -666,7 +684,7 @@ fn build_ui(app: &gtk4::Application) {
                         let _ = tx.send(payload);
                     });
                 }
-                "select-model" | "select-mmproj" => {
+                "select-model" | "select-mmproj" | "select-mtp" => {
                     let Some(req) = request_id.clone() else {
                         let payload = serde_json::json!({
                             "type": "command-result",
@@ -701,13 +719,17 @@ fn build_ui(app: &gtk4::Application) {
                         publish_command_result(&view, &payload);
                         return;
                     };
+                    let cmd_label = cmd.to_owned();
                     let is_mm = cmd == "select-mmproj";
+                    let is_mtp = cmd == "select-mtp";
                     let view_task = view.clone();
                     let req_key = req.clone();
                     let req_insert = req.clone();
 
                     let dialog = gtk4::FileChooserNative::new(
-                        Some(if is_mm {
+                        Some(if is_mtp {
+                            "MTP GGUF"
+                        } else if is_mm {
                             "Selecionar projetor de imagem (mmproj)"
                         } else {
                             "Selecionar modelo GGUF"
@@ -728,7 +750,9 @@ fn build_ui(app: &gtk4::Application) {
                         .map(PathBuf::from)
                         .filter(|d| d.is_dir())
                         .or_else(|| {
-                            let cur = if is_mm {
+                            let cur = if is_mtp {
+                                settings.integrated_params.mtp_draft.clone()
+                            } else if is_mm {
                                 settings.model_mmproj.clone()
                             } else {
                                 settings.model_gguf.clone()
@@ -748,7 +772,6 @@ fn build_ui(app: &gtk4::Application) {
                     // Referência fraca ao registro (evita ciclo forte diálogo ↔ callback).
                     let dialogs_weak = Rc::downgrade(&dialogs);
                     dialog.connect_response(move |dlg, resp| {
-                        let cmd_label = if is_mm { "select-mmproj" } else { "select-model" };
                         if resp == gtk4::ResponseType::Accept {
                             let sel = dlg.file().and_then(|f| f.path());
                             if let Some(p) = sel {
@@ -951,7 +974,15 @@ fn build_ui(app: &gtk4::Application) {
         });
     }
     *window_holder.borrow_mut() = Some(window.upcast_ref::<gtk4::Window>().clone());
-    window.present();
+    view.connect_load_changed(glib::clone!(#[weak] window, move |_, event| {
+        if event == webkit6::LoadEvent::Finished && !window.is_visible() {
+            window.present();
+        }
+    }));
+    view.connect_load_failed(glib::clone!(#[weak] window, #[upgrade_or] false, move |_, _, _, _| {
+        window.present();
+        false
+    }));
 
     push_backend_state(&view, &manager);
     view.load_uri(&entry);

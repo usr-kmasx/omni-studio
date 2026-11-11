@@ -11,6 +11,9 @@ use crate::{dispatch_on_main, publish_command_result};
 #[derive(Clone, Default)]
 pub struct CatalogBridge {
     downloading: Rc<Cell<bool>>,
+    choosing_folder: Rc<Cell<bool>>,
+    download_popup: Rc<glib::WeakRef<gtk4::Box>>,
+    popup_actions: Rc<std::cell::RefCell<Value>>,
     cancel: Arc<AtomicBool>,
     pause: Arc<AtomicBool>,
     skip_verification: Arc<AtomicBool>,
@@ -193,7 +196,23 @@ impl CatalogBridge {
         title.set_xalign(0.0);
         toolbar.append(&title);
         let external = button("web-browser-symbolic", &label("external", "Open in browser"));
-        let downloads = button("folder-download-symbolic", &label("downloads", "Downloads in Omni Studio"));
+        let downloads_label = label("downloads", "Downloads in Omni Studio");
+        let downloads = gtk4::MenuButton::builder()
+            .icon_name("folder-download-symbolic").tooltip_text(&downloads_label).build();
+        downloads.update_property(&[gtk4::accessible::Property::Label(&downloads_label)]);
+        let popup = gtk4::Popover::new();
+        let content = gtk4::Box::new(gtk4::Orientation::Vertical, 8);
+        content.set_size_request(300, -1);
+        popup.set_child(Some(&content));
+        downloads.set_popover(Some(&popup));
+        toolbar.append(&downloads);
+        self.download_popup.set(Some(&content));
+        popup.connect_show(glib::clone!(#[weak] app_view, move |_| {
+            app_view.evaluate_javascript(
+                "window.dispatchEvent(new Event('omni-hf-download-popup'))",
+                None, None, None::<&gtk4::gio::Cancellable>, |_| {},
+            );
+        }));
         let layout = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
         layout.append(&toolbar);
         layout.append(&web);
@@ -205,12 +224,10 @@ impl CatalogBridge {
         external.connect_clicked(glib::clone!(#[weak] web, move |_| {
             if let Some(url) = web.uri() { let _ = open_external(&url); }
         }));
-        for button in [&close, &downloads] {
-            button.connect_clicked(glib::clone!(#[weak] stack, #[weak] app_view, move |_| {
-                stack.set_visible_child_name("omni");
-                app_view.grab_focus();
-            }));
-        }
+        close.connect_clicked(glib::clone!(#[weak] stack, #[weak] app_view, move |_| {
+            stack.set_visible_child_name("omni");
+            app_view.grab_focus();
+        }));
         back.set_sensitive(false);
         forward.set_sensitive(false);
         web.connect_load_changed(glib::clone!(#[weak] back, #[weak] forward, move |web, _| {
@@ -219,7 +236,6 @@ impl CatalogBridge {
         }));
 
         let preparing = Rc::new(Cell::new(false));
-        let bridge = self.clone();
         let app_view = app_view.clone();
         let downloading_label = label("loading", "Loading…");
         let error_label = label("error", "Could not open the selected file.");
@@ -244,7 +260,7 @@ impl CatalogBridge {
                 if let Some(file) = hub_model_file(&uri) {
                     decision.ignore();
                     if !action.is_user_gesture() { return true; }
-                    if bridge.downloading.get() || preparing.get() || paused_job().is_some() {
+                    if preparing.get() {
                         title.set_text(&busy_label);
                         return true;
                     }
@@ -356,89 +372,112 @@ impl CatalogBridge {
             publish_command_result(view, &result);
             return;
         }
-        if cmd != "hf-download" { return; }
-        let repo = request["repo"].as_str().unwrap_or_default().to_owned();
-        let revision = request["revision"].as_str().unwrap_or_default().to_owned();
-
-        if !self.downloading.get() && (paused_job().is_some() || load_paused().is_some()) {
-            publish_command_result(view, &json!({ "requestId": id, "ok": false, "code": "paused" }));
+        if cmd == "hf-popup-state" {
+            if let Some(content) = self.download_popup.upgrade() {
+                let summary = if let Some(label) = content.first_child().and_downcast::<gtk4::Label>() {
+                    label
+                } else {
+                    let label = gtk4::Label::new(None);
+                    label.set_wrap(false);
+                    label.set_ellipsize(gtk4::pango::EllipsizeMode::End);
+                    label.set_width_chars(38);
+                    label.set_max_width_chars(46);
+                    label.set_xalign(0.0);
+                    label.set_selectable(true);
+                    content.prepend(&label);
+                    label
+                };
+                summary.set_text(request["text"].as_str().unwrap_or_default());
+                let mut previous = self.popup_actions.borrow_mut();
+                if *previous == request["actions"] {
+                    publish_command_result(view, &json!({ "requestId": id, "ok": true }));
+                    return;
+                }
+                *previous = request["actions"].clone();
+                if let Some(actions) = summary.next_sibling() { content.remove(&actions); }
+                let actions = gtk4::Box::new(gtk4::Orientation::Horizontal, 6);
+                for key in ["pause", "skip-verification", "stop"] {
+                    if let Some(label) = request["actions"][key]["label"].as_str() {
+                        let button = gtk4::Button::with_label(label);
+                        button.set_sensitive(!request["actions"][key]["disabled"].as_bool().unwrap_or(false));
+                        let script = format!("window.dispatchEvent(new CustomEvent('omni-hf-download-action', {{detail: '{key}'}}))");
+                        button.connect_clicked(glib::clone!(#[weak] view, move |_| {
+                            view.evaluate_javascript(&script, None, None, None::<&gtk4::gio::Cancellable>, |_| {});
+                        }));
+                        actions.append(&button);
+                    }
+                }
+                if actions.first_child().is_some() { content.append(&actions); }
+            }
+            publish_command_result(view, &json!({ "requestId": id, "ok": true }));
             return;
         }
-        let Some(parent) = parent else {
-            publish_command_result(view, &json!({ "requestId": id, "ok": false, "code": "folder" }));
+
+        if cmd == "hf-choose-folder" {
+            let Some(parent) = parent.filter(|_| !self.choosing_folder.replace(true)) else {
+                publish_command_result(view, &json!({ "requestId": id, "ok": false, "code": "busy" }));
+                return;
+            };
+            let label = |key: &str| request[key].as_str().filter(|s| !s.is_empty());
+            let dialog = gtk4::FileChooserNative::new(
+                label("folderTitle"), Some(&parent), gtk4::FileChooserAction::SelectFolder,
+                label("acceptLabel"), label("cancelLabel"),
+            );
+            let folder = Settings::load().hf_download_dir.map(PathBuf::from)
+                .filter(|path| path.is_dir())
+                .or_else(|| glib::user_special_dir(glib::UserDirectory::Downloads).filter(|path| path.is_dir()))
+                .unwrap_or_else(glib::home_dir);
+            let _ = dialog.set_current_folder(Some(&gtk4::gio::File::for_path(folder)));
+            let choosing = self.choosing_folder.clone();
+            let view = view.clone();
+            let hold = Rc::new(std::cell::RefCell::new(Some(dialog.clone())));
+            dialog.connect_response(move |dialog, response| {
+                hold.borrow_mut().take();
+                choosing.set(false);
+                let result = if response != gtk4::ResponseType::Accept {
+                    json!({ "requestId": id, "ok": true, "cancelled": true })
+                } else if let Some(folder) = dialog.file().and_then(|file| file.path())
+                    .filter(|path| path.is_dir()).and_then(|path| path.into_os_string().into_string().ok())
+                {
+                    if Settings::load().update(|s| s.hf_download_dir = Some(folder.clone())).is_ok() {
+                        json!({ "requestId": id, "ok": true, "folder": folder })
+                    } else {
+                        json!({ "requestId": id, "ok": false, "code": "folder" })
+                    }
+                } else {
+                    json!({ "requestId": id, "ok": false, "code": "folder" })
+                };
+                publish_command_result(&view, &result);
+            });
+            dialog.show();
             return;
-        };
-        if self.downloading.replace(true) {
+        }
+
+        if cmd != "hf-download" { return; }
+        if self.downloading.get() || paused_job().is_some() || load_paused().is_some() {
             publish_command_result(view, &json!({ "requestId": id, "ok": false, "code": "busy" }));
             return;
         }
-        let bridge = self.clone();
-        let label = |key: &str| request[key].as_str().filter(|s| !s.is_empty());
-        let dialog = gtk4::FileChooserNative::new(
-            label("folderTitle"), Some(&parent), gtk4::FileChooserAction::SelectFolder,
-            label("acceptLabel"), label("cancelLabel"),
-        );
-        let folder = Settings::load().hf_download_dir.map(std::path::PathBuf::from)
-            .filter(|path| path.is_dir())
-            .or_else(|| glib::user_special_dir(glib::UserDirectory::Downloads).filter(|path| path.is_dir()))
-            .unwrap_or_else(glib::home_dir);
-        let _ = dialog.set_current_folder(Some(&gtk4::gio::File::for_path(folder)));
+        let repo = request["repo"].as_str().unwrap_or_default().to_owned();
+        let revision = request["revision"].as_str().unwrap_or_default().to_owned();
         let names: Vec<String> = request["variants"].as_array().into_iter().flatten()
             .filter_map(Value::as_str).map(str::to_owned).collect();
         if names.is_empty() {
-            self.downloading.set(false);
             publish_command_result(view, &json!({ "requestId": id, "ok": false, "code": "variant" }));
             return;
         }
-        let view = view.clone();
-        let downloading = self.downloading.clone();
-        // Keep the native dialog alive until it emits a response.
-        let dialog_hold = Rc::new(std::cell::RefCell::new(Some(dialog.clone())));
-        dialog.connect_response(move |dialog, response| {
-            dialog_hold.borrow_mut().take();
-            if response != gtk4::ResponseType::Accept {
-                downloading.set(false);
-                publish_command_result(&view, &json!({ "requestId": id, "ok": true, "cancelled": true }));
-                return;
-            }
-            let Some(folder) = dialog.file().and_then(|file| file.path()).filter(|path| path.is_dir()) else {
-                downloading.set(false);
-                publish_command_result(&view, &json!({ "requestId": id, "ok": false, "code": "folder" }));
-                return;
-            };
-            let Some(folder_text) = folder.to_str() else {
-                downloading.set(false);
-                publish_command_result(&view, &json!({ "requestId": id, "ok": false, "code": "folder" }));
-                return;
-            };
-            if Settings::load().update(|s| s.hf_download_dir = Some(folder_text.to_owned())).is_err() {
-                downloading.set(false);
-                publish_command_result(&view, &json!({ "requestId": id, "ok": false, "code": "folder" }));
-                return;
-            }
-
-            let folder = match huggingface::model_download_folder(&folder, &repo) {
-                Ok(path) => path,
-                Err(_) => {
-                    downloading.set(false);
-                    publish_command_result(&view, &json!({ "requestId": id, "ok": false, "code": "folder" }));
-                    return;
-                }
-            };
-            let staging = match huggingface::new_download_staging(&folder) {
-                Ok(path) => path,
-                Err(_) => {
-                    downloading.set(false);
-                    publish_command_result(&view, &json!({ "requestId": id, "ok": false, "code": "folder" }));
-                    return;
-                }
-            };
-            bridge.start_job(DownloadJob {
-                repo: repo.clone(), revision: revision.clone(), names: names.clone(),
-                folder, staging, results: Vec::new(), expires: 0,
-            }, id.clone(), view.clone());
-        });
-        dialog.show();
+        let folder = request["folder"].as_str().map(PathBuf::from).filter(|path| path.is_dir())
+            .and_then(|folder| huggingface::model_download_folder(&folder, &repo).ok());
+        let Some((folder, staging)) = folder.and_then(|folder| {
+            huggingface::new_download_staging(&folder).ok().map(|staging| (folder, staging))
+        }) else {
+            publish_command_result(view, &json!({ "requestId": id, "ok": false, "code": "folder" }));
+            return;
+        };
+        self.downloading.set(true);
+        self.start_job(DownloadJob {
+            repo, revision, names, folder, staging, results: Vec::new(), expires: 0,
+        }, id, view.clone());
     }
 
     fn start_job(&self, mut job: DownloadJob, id: String, view: webkit6::WebView) {

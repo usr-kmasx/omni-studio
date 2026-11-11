@@ -14,7 +14,7 @@
   --accent-soft: #414147;
 }
 body {
-  --omni-nav-bottom: 54px;
+  --omni-nav-bottom: 51px;
   --omni-content-width: min(1035px, calc(100vw - 32px));
 }
 #topbar {
@@ -22,7 +22,7 @@ body {
   justify-content: center;
   background: transparent;
   border: 0;
-  padding: 8px 12px 6px;
+  padding: 5px 12px 6px;
 }
 .omni-navigation {
   display: flex;
@@ -55,14 +55,12 @@ body {
   transform: translateX(calc(var(--nav-position) * (var(--nav-size) + var(--nav-gap))));
   transition: transform 180ms ease;
 }
-.omni-navigation:has(#btnHistory[aria-expanded="true"], #btnHistory:focus-visible) { --nav-position: 0; }
-body:has(.settings-modal) .omni-navigation,
-.omni-navigation:has(#btnSettings:focus-visible) { --nav-position: 2; }
-.omni-navigation:has(#chatTab:focus-visible) { --nav-position: 1; }
+.omni-navigation:has(:where(#btnHistory):focus-visible) { --nav-position: 0; }
+.omni-navigation:has(:where(#btnSettings):focus-visible) { --nav-position: 2; }
 @media (hover: hover) {
   .omni-navigation:has(#btnHistory:hover) { --nav-position: 0; }
   .omni-navigation:has(#chatTab:hover) { --nav-position: 1; }
-  body .omni-navigation:has(#btnSettings:hover) { --nav-position: 2; }
+  .omni-navigation:has(#btnSettings:hover) { --nav-position: 2; }
 }
 .omni-navigation .icon-btn:is(.active, :hover, [aria-expanded="true"]) { background: transparent; }
 .omni-navigation .icon-btn { color: var(--text); }
@@ -78,8 +76,9 @@ body:has(.settings-modal) .omni-navigation,
   stroke-linecap: round;
   stroke-linejoin: round;
 }
-#composerHost { background: var(--bg); padding-bottom: clamp(12px, 3.4vh, 26px); }
-.composer { max-width: 770px; border-radius: 15px; box-shadow: none; }
+#composerHost { --composer-width: 770px; background: var(--bg); padding-bottom: 5px; }
+#composerHost :is(.composer, .voice-bar) { max-width: var(--composer-width); }
+.composer { border-radius: 15px; box-shadow: none; }
 .composer:focus-within { border-color: var(--text-faint); }
 .composer textarea { min-height: 40px; }
 .composer-actions {

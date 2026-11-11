@@ -53,6 +53,10 @@ pub struct IntegratedParams {
     pub model: Option<String>,
     /// `-mm` — projetor multimodal opcional.
     pub mmproj: Option<String>,
+    #[serde(default)]
+    pub mtp: bool,
+    #[serde(default)]
+    pub mtp_draft: Option<String>,
     /// `-ngl` — camadas na GPU (auto|all|<n>).
     pub ngl: String,
     /// `-ctk`.
@@ -90,6 +94,8 @@ impl Default for IntegratedParams {
         Self {
             model: None,
             mmproj: None,
+            mtp: false,
+            mtp_draft: None,
             ngl: "all".into(),
             cache_type_k: "q4_0".into(),
             cache_type_v: "q4_0".into(),

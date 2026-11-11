@@ -291,7 +291,21 @@ input, select, textarea { font-family: inherit; color: inherit; }
   transition: color .15s, border-color .15s;
 }
 .md-copy:hover { color: var(--text); border-color: var(--accent); }
-.md-code pre { margin: 0; padding: 12px 14px; overflow-x: auto; }
+.md-code pre {
+  margin: 0;
+  padding: 12px 14px;
+  max-height: 65vh;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.bubble .md .md-code pre code {
+  display: block;
+  background: transparent;
+  padding: 0;
+  border-radius: 0;
+  white-space: inherit;
+}
 .md-code code { font-family: var(--mono); font-size: 13px; color: #cdd6e4; }
 
 /* anexos no balão */
@@ -981,7 +995,7 @@ select option { background: var(--surface-2); color: var(--text); }
 
 .hf-transfer-buttons { display: flex; gap: 8px; flex-wrap: wrap; }
 .hf-transfer-buttons [hidden] { display: none; }
-.hf-transfer [data-transfer-results] ul { max-height: 110px; overflow: auto; margin: 5px 0; padding-inline-start: 18px; }
+.hf-transfer :is([data-transfer-results] ul, [data-transfer-queue]) { max-height: 110px; overflow: auto; margin: 5px 0; padding-inline-start: 18px; }
 .hf-transfer {
   box-sizing: border-box;
   inline-size: min(380px, calc(100vw - 32px)); max-block-size: calc(100vh - 32px);
@@ -993,12 +1007,19 @@ select option { background: var(--surface-2); color: var(--text); }
   position: absolute; top: 5px; right: 6px; width: 30px; height: 30px;
   color: var(--accent);
 }
-.hf-transfer-toggle img { width: 21px; height: 21px; }
+.hf-transfer-toggle img { width: 21px; height: 21px; border-radius: 50%; object-fit: cover; }
 .hf-transfer.is-collapsed {
   inline-size: 44px; block-size: 44px; padding: 0; overflow: hidden; border-radius: 50%;
 }
-.hf-transfer.is-collapsed .hf-transfer-toggle { position: static; width: 100%; height: 100%; }
-.hf-transfer.is-collapsed .hf-transfer-toggle img { width: 28px; height: 28px; }
+.hf-transfer.is-collapsed .hf-transfer-toggle {
+  position: static;
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+}
+.hf-transfer.is-collapsed .hf-transfer-toggle img { display: block; width: 38px; height: 38px; }
 
 #composerHost { position: relative; }
 .chat-jump-latest.icon-btn {
@@ -1101,3 +1122,41 @@ select option { background: var(--surface-2); color: var(--text); }
 
 .image-settings [data-checkpoint][hidden] { display: none; }
 .image-settings [data-components] > * { margin-top: 8px; }
+
+.msg .bubble table { border-collapse: collapse; display: block; max-width: 100%; overflow-x: auto; }
+.msg .bubble :is(th, td) { padding: 6px 10px; border: 1px solid var(--border); }
+.html-validation { display: block; padding: 6px 10px; color: var(--text-dim); }
+
+.md-code-actions { display: flex; align-items: center; gap: 6px; }
+.md-code-actions .md-preview { width: 28px; height: 25px; }
+.html-preview-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  padding: 12px;
+  background: #0008;
+}
+.html-preview-dialog {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+}
+.html-preview-dialog header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 5px 10px;
+  flex-shrink: 0;
+}
+.html-preview-dialog iframe {
+  width: 100%;
+  flex: 1;
+  min-height: 0;
+  border: 0;
+  background: white;
+}

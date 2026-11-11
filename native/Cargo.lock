@@ -1058,7 +1058,7 @@ checksum = "521739c6d2bac4aa25192232afe6841231376b2b26d4d9fae5ecf8ca5772e441"
 
 [[package]]
 name = "omni-app"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "base64",
  "env_logger",
@@ -1073,7 +1073,7 @@ dependencies = [
 
 [[package]]
 name = "omni-core"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "base64",
  "dirs",

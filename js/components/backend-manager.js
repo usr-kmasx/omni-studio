@@ -183,6 +183,17 @@ export function openBackendManager({ onBack, onSettingsChanged } = {}) {
                 <button class="btn bm-danger" id="bmClearMm" type="button" style="display:none">${t('backend.clear')}</button>
               </div>
             </div>
+            <label class="check-row"><input type="checkbox" id="bmMtp" ${s.paramsMtp ? 'checked' : ''}> MTP (Multi-Token Prediction)</label>
+            <div class="bm-file-row">
+              <div class="bm-file-info">
+                <span class="bm-file-label">MTP GGUF <span class="bm-file-optional">${t('backend.optional')}</span></span>
+                <b class="bm-file-name" id="bmMtpName"></b>
+              </div>
+              <div class="bm-file-actions">
+                <button class="btn" id="bmSelectMtp" type="button">${t('backend.choose')}</button>
+                <button class="btn bm-danger" id="bmClearMtp" type="button">${t('backend.clear')}</button>
+              </div>
+            </div>
           </section>
 
           <details class="bm-section bm-advanced">
@@ -321,6 +332,14 @@ export function openBackendManager({ onBack, onSettingsChanged } = {}) {
     // Nome visível; caminho completo no tooltip.
     const modelPath = fileDraft.has('model') ? fileDraft.get('model') : st.paramsModel;
     const mmPath = fileDraft.has('mmproj') ? fileDraft.get('mmproj') : st.paramsMmproj;
+    const mtpPath = fileDraft.has('mtp_draft') ? fileDraft.get('mtp_draft') : st.paramsMtpDraft;
+    const mtpName = modal.querySelector('#bmMtpName');
+    mtpName.textContent = mtpPath?.split('/').pop() || t('backend.noneSelected');
+    mtpName.title = mtpPath || '';
+    modal.querySelector('#bmSelectMtp').disabled = savingParams || modelSelectionPending || busyOp || !known;
+    const clearMtp = modal.querySelector('#bmClearMtp');
+    clearMtp.hidden = !mtpPath;
+    clearMtp.disabled = modal.querySelector('#bmSelectMtp').disabled;
     const modelName = modelPath ? modelPath.split('/').pop() : '';
     const mmName = mmPath ? mmPath.split('/').pop() : '';
     setText('bmModelName', modelName || t('backend.noneSelected'));
@@ -371,7 +390,7 @@ export function openBackendManager({ onBack, onSettingsChanged } = {}) {
     bmThreads: 'threads', bmThreadsBatch: 'threads_batch', bmBatch: 'batch_size',
     bmUbatch: 'ubatch_size', bmSlots: 'slots', bmFa: 'flash_attn',
     bmReasoning: 'reasoning', bmHost: 'host', bmPort: 'port',
-    bmCors: 'cors_origins', bmNoWebui: 'no_webui',
+    bmMtp: 'mtp', bmCors: 'cors_origins', bmNoWebui: 'no_webui',
   };
 
   modal.querySelector('#bmSaveServerUrl').addEventListener('click', async (event) => {
@@ -401,6 +420,7 @@ export function openBackendManager({ onBack, onSettingsChanged } = {}) {
       case 'bmThreads': case 'bmThreadsBatch': case 'bmBatch':
       case 'bmUbatch': case 'bmSlots': return parseOpt(e.value);
       case 'bmPort': return parseOptU16(e.value);
+      case 'bmMtp':
       case 'bmNoWebui': return e.checked;
       case 'bmCors': return e.value.trim();
       default: return e.value.trim() || null;
@@ -427,7 +447,7 @@ export function openBackendManager({ onBack, onSettingsChanged } = {}) {
 
   for (const id of Object.keys(KEYMAP)) {
     const input = modal.querySelector('#' + id);
-    input.addEventListener(id === 'bmNoWebui' ? 'change' : 'input', () => {
+    input.addEventListener(input.type === 'checkbox' ? 'change' : 'input', () => {
       dirtyParams.add(id);
       updateSaveButton();
       saveStatus.textContent = '';
@@ -564,6 +584,7 @@ export function openBackendManager({ onBack, onSettingsChanged } = {}) {
   };
   bindSelect('bmSelectModel', 'select-model', 'bmClearModel', 'model');
   bindSelect('bmSelectMm', 'select-mmproj', 'bmClearMm', 'mmproj');
+  bindSelect('bmSelectMtp', 'select-mtp', 'bmClearMtp', 'mtp_draft');
 
 
   const btnStart = modal.querySelector('#bmStart');

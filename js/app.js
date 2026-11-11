@@ -1,3 +1,4 @@
+import { repairHtml } from './utils/html-validation.js';
 // ============================================================
 // Omni Studio — aplicação principal
 // Interface web para LFM3-Omni-2B via llama.cpp (local)
@@ -374,7 +375,7 @@ async function sendText({ text, media: rawMedia }) {
     void persistConversation();
     let rate = null;
     let usedTokens = null;
-    const { text: out, usage, finishReason } = await streamChatCompletion({
+    let { text: out, usage, finishReason } = await streamChatCompletion({
       baseUrl: baseUrl(),
       // Instrução oficial da Liquid AI para vídeo: pede para usar o que se VÊ e se OUVE.
       messages: conversationToMessages(state.textConv, {
@@ -411,6 +412,30 @@ async function sendText({ text, media: rawMedia }) {
       },
     });
 
+    out = await repairHtml(out, {
+      signal: abort.signal,
+      onErrors: () => controller.setHtmlCorrection(true),
+      onUpdate: (updated) => {
+        amsg.text = updated;
+        controller.setMd(updated);
+        void persistConversation();
+        lastDeltaAt = performance.now();
+      },
+      generate: async (prompt) => {
+        lastDeltaAt = performance.now();
+        const reply = await streamChatCompletion({
+          baseUrl: baseUrl(),
+          messages: [
+            { role: 'system', content: 'You repair HTML syntax with minimal line edits. Return only the requested JSON patch.' },
+            { role: 'user', content: prompt },
+          ],
+          signal: abort.signal,
+          onDelta: () => { lastDeltaAt = performance.now(); },
+        });
+        return reply.text;
+      },
+    });
+    controller.setHtmlCorrection(false);
     amsg.inFlight = false;
     amsg.text = out;
     amsg.usage = usage;
@@ -600,8 +625,18 @@ function imageResponse(message) {
   const row = el(`<div class="msg assistant"><div class="avatar">${icon('image', 16)}</div>
     <div class="body generated-image-result"></div></div>`);
   const body = row.querySelector('.body');
-  const progressStatus = el('<p role="status"></p>');
-  const progressBar = el(`<progress data-i18n-aria="image.generating" aria-label="${t('image.generating')}"></progress>`);
+  const scene = el('<div class="image-generation-scene"></div>');
+  const meter = el(`<div class="image-generation-meter" role="progressbar"
+    data-i18n-aria="image.generating" aria-label="${t('image.generating')}"><span aria-hidden="true">…</span></div>`);
+  const percentage = meter.firstElementChild;
+  for (let i = 0; i < 24; i++) {
+    const drop = el('<span class="image-generation-drop" aria-hidden="true"></span>');
+    drop.style.setProperty('--x', `${4 + ((i * 37) % 92)}%`);
+    drop.style.setProperty('--duration', `${650 + ((i * 71) % 550)}ms`);
+    drop.style.setProperty('--delay', `-${(i * 173) % 1200}ms`);
+    scene.append(drop);
+  }
+  scene.append(meter);
   function paint() {
     body.replaceChildren();
     const media = message.media?.[0];
@@ -622,7 +657,9 @@ function imageResponse(message) {
           showLightbox(preview.src);
         }
       });
-      const save = el(`<button class="btn" type="button" data-i18n="image.export">${t('image.export')}</button>`);
+      const save = el(`<button class="icon-btn generated-image-save" type="button"
+        data-i18n-title="image.export" data-i18n-aria="image.export"
+        title="${t('image.export')}" aria-label="${t('image.export')}">${icon('download', 16)}</button>`);
       save.addEventListener('click', async () => {
         expireVisibleMedia();
         if (media.expired) return;
@@ -631,10 +668,11 @@ function imageResponse(message) {
         catch (error) { appToast(error.message || t('image.failed'), 'error'); }
         finally { save.disabled = false; }
       });
-      body.append(preview, save);
+      const frame = el('<div class="generated-image-frame"></div>');
+      frame.append(preview, save);
+      body.append(frame);
     } else if (message.inFlight) {
-      progressStatus.textContent = t('image.generating');
-      body.append(progressStatus, progressBar);
+      body.append(scene);
     } else {
       const label = el('<p role="status"></p>');
       label.textContent = message.imageState === 'cancelled'
@@ -646,12 +684,11 @@ function imageResponse(message) {
   return {
     row,
     paint,
-    progress({ label, completed, total }) {
-      if (progressStatus.textContent !== label) progressStatus.textContent = label;
-      if (total > 0) {
-        progressBar.max = total;
-        progressBar.value = completed || 0;
-      } else progressBar.removeAttribute('value');
+    progress({ completed, total }) {
+      const percent = total > 0 ? Math.min(100, Math.max(0, Math.floor((completed || 0) / total * 100))) : null;
+      percentage.textContent = percent === null ? '…' : `${percent}%`;
+      if (percent === null) meter.removeAttribute('aria-valuenow');
+      else meter.setAttribute('aria-valuenow', String(percent));
     },
   };
 }
