@@ -40,6 +40,7 @@ version=$(sed -n 's/^version = "\([^"]*\)"/\1/p' "$repo/native/Cargo.toml" | hea
 printf '%s\n' "$version" > "$package/VERSION"
 install -m 755 "$repo/tools/launch-linux.sh" "$package/launch.sh"
 install -m 755 "$repo/tools/install-linux.sh" "$package/install.sh"
+install -m 755 "$repo/tools/uninstall-linux.sh" "$package/uninstall.sh"
 for variant in cpu vulkan; do
     bundle="$inputs/omni-image-runtimes/$variant"
     digest=$(cat "$bundle/sd-server.zip.sha256")

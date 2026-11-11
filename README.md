@@ -8,6 +8,8 @@ Extraia a pasta inteira do pacote e execute `./install.sh`. O instalador verific
 
 O pacote já contém os componentes necessários para iniciar o modelo sem baixar arquivos. Um servidor externo compatível, quando disponível, tem prioridade. Quem já usa o Omni Studio pode selecionar **Usar LFM3-Omni incluído** e salvar, ou continuar usando o modelo configurado. Mantenha a pasta inteira ao mover o app.
 
+Para desinstalar, execute `bash uninstall.sh` (ou `bash uninstall.sh --prefix DIRETORIO` para uma instalação com destino personalizado). O script remove o aplicativo, o atalho e o ícone, preservando conversas, preferências e modelos armazenados separadamente.
+
 ### Montagem do pacote
 
 Use `tools/package-linux-complete.sh DIRETORIO_DE_INSUMOS BINARIO_RELEASE SAIDA.tar.gz` no Linux x86-64. Compile `omni-app` em modo release e coloque estes insumos no diretório indicado:
